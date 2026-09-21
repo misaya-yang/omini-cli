@@ -47,6 +47,9 @@ capability. This project treats an unprobed capability as unsupported.
 
 ## Install
 
+Moving to a second machine? [`docs/SETUP.md`](docs/SETUP.md) is the checklist —
+it also lists what must **not** be copied across, and why.
+
 Requires Python 3.12+. `ffmpeg` is optional but recommended — without it,
 keyframe-level review and transcoding are unavailable (the tool says so rather
 than pretending otherwise).
@@ -381,7 +384,10 @@ audio, and C2PA. It refuses to run without the opt-in.
 
 ## Known limitations
 
-See [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) for the full list, including:
+See [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) for the full list, and
+[`docs/SETUP.md`](docs/SETUP.md) for setting up on another machine.
+
+Included:
 
 - Preview-model behaviour is not a stable protocol; re-probe before relying on it.
 - 1080p/4K are upscales. A re-render at 1080p is **not** the same content as the
