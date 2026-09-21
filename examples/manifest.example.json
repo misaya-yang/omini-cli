@@ -1,0 +1,734 @@
+{
+  "schema_version": 1,
+  "job_id": "job-20260921-091204-4f1c8a",
+  "provider": "vertex",
+  "project": "example-homevlog-project",
+  "model": "gemini-omni-1.1-flash-preview",
+  "state": "COMPLETE",
+  "created_at": "2026-09-21T09:12:04Z",
+  "updated_at": "2026-09-21T09:41:37Z",
+  "spec": {
+    "title": "Synthetic 30-second boyfriend-POV home vlog",
+    "brief": "30-second intimate boyfriend-POV home vlog: a fictional synthetic subject drinks tea at the kitchen table, walks to the bedroom, sits on the bed, and covers the lens. Reference images are synthetic; no real person is depicted.",
+    "target_duration_s": 30,
+    "aspect_ratio": "9:16",
+    "resolution": "720p",
+    "audio_enabled": true,
+    "style": "intimate handheld boyfriend-POV home vlog, natural and unposed",
+    "provider": "vertex",
+    "max_total_calls": 8,
+    "max_segment_retries": 2,
+    "require_human_before_high_res": true,
+    "mode": "production",
+    "project": "example-homevlog-project",
+    "model": "gemini-omni-1.1-flash-preview",
+    "location": "global",
+    "gcs_uri": "gs://example-homevlog-output/omni-output/",
+    "concept_duration_s": 4,
+    "human_gates": [
+      "high-res",
+      "final"
+    ]
+  },
+  "references": [
+    {
+      "id": "ref00_identity_closeup",
+      "path_or_uri": "/srv/omni-vlog/.omni-vlog/jobs/job-20260921-091204-4f1c8a/input/references/00_identity_closeup_c5f8e98f.png",
+      "role": "identity_closeup",
+      "sha256": "c5f8e98f9cc8393466379316ee89068e492faf15e22ebda6aa4e35d9588e830a",
+      "provenance": "synthetic",
+      "approved": true,
+      "width": 1024,
+      "height": 1536,
+      "mime_type": "image/png",
+      "perceptual_hash": "6e3a91c05b7d2f48",
+      "sanitizer": {
+        "has_text_overlay": false,
+        "has_timestamp": false,
+        "has_ui_controls": false,
+        "is_collage": false,
+        "multiple_distinct_people": false,
+        "is_clean_identity_reference": true,
+        "subject_is_adult": true,
+        "warnings": [],
+        "degraded": false,
+        "degradation_reason": null
+      }
+    },
+    {
+      "id": "ref01_identity_body",
+      "path_or_uri": "/srv/omni-vlog/.omni-vlog/jobs/job-20260921-091204-4f1c8a/input/references/01_identity_body_c1be5521.png",
+      "role": "identity_body",
+      "sha256": "c1be5521b9cde487b8f5a107e5e1ebc098f142b1f91267f2083b4396d9620954",
+      "provenance": "synthetic",
+      "approved": true,
+      "width": 1024,
+      "height": 1536,
+      "mime_type": "image/png",
+      "perceptual_hash": "b2047fd8c1e6953a",
+      "sanitizer": {
+        "has_text_overlay": false,
+        "has_timestamp": false,
+        "has_ui_controls": false,
+        "is_collage": false,
+        "multiple_distinct_people": false,
+        "is_clean_identity_reference": true,
+        "subject_is_adult": true,
+        "warnings": [],
+        "degraded": false,
+        "degradation_reason": null
+      }
+    },
+    {
+      "id": "ref02_environment",
+      "path_or_uri": "/srv/omni-vlog/.omni-vlog/jobs/job-20260921-091204-4f1c8a/input/references/02_environment_1018fb4e.png",
+      "role": "environment",
+      "sha256": "1018fb4e82d7706539018ccc315f144487447fca0ec70cf4d9044aa880e5d499",
+      "provenance": "synthetic",
+      "approved": true,
+      "width": 1536,
+      "height": 1024,
+      "mime_type": "image/png",
+      "perceptual_hash": "0fa3c67b5d18e294",
+      "sanitizer": {
+        "has_text_overlay": false,
+        "has_timestamp": false,
+        "has_ui_controls": false,
+        "is_collage": false,
+        "multiple_distinct_people": false,
+        "is_clean_identity_reference": true,
+        "subject_is_adult": null,
+        "warnings": [],
+        "degraded": false,
+        "degradation_reason": null
+      }
+    }
+  ],
+  "continuity_bible": {
+    "subject_identity": "Mira, a fictional adult woman who exists only as a synthetic reference image. She is rendered from the three synthetic reference images in this job. No real person is depicted, and no real person's likeness was used.",
+    "immutable_face_traits": [
+      "soft oval face with a slightly rounded jaw",
+      "dark brown eyes with a single eyelid crease",
+      "small mole below the outer corner of the left eye",
+      "natural skin texture, no heavy smoothing"
+    ],
+    "hair": [
+      "long dark brown hair, straight, parted slightly left of centre",
+      "length past the shoulder blades",
+      "small silver hair clip on the right side, worn throughout"
+    ],
+    "accessories": [
+      "thin silver ring on the right hand",
+      "small silver hair clip, right side"
+    ],
+    "outfit": [
+      "oversized cream knit sweater with a wide collar",
+      "plain grey cotton trousers",
+      "bare feet at home"
+    ],
+    "body_proportion": [
+      "average adult height and build",
+      "narrow shoulders, relaxed posture"
+    ],
+    "environment_topology": [
+      "one small apartment with a kitchen at one end and a bedroom at the other",
+      "kitchen doorway on the right of the table, reached in a few steps",
+      "short hallway between the kitchen and the bedroom",
+      "one window on the left of the kitchen table, daylight only"
+    ],
+    "lighting": [
+      "soft morning daylight from the kitchen window",
+      "ordinary warm indoor light, no coloured gels",
+      "no direct flash"
+    ],
+    "camera_grammar": [
+      "one continuous handheld take, boyfriend POV",
+      "close conversational distance, phone at chest height",
+      "subtle natural sway, no stabiliser look",
+      "no cut, no zoom, no whip pan"
+    ],
+    "interaction_style": [
+      "unposed and spontaneous, aware of the camera but not performing",
+      "small natural movements, no commercial acting"
+    ],
+    "forbidden_visual_elements": [
+      "on-screen text",
+      "timestamps",
+      "shot numbers",
+      "subtitles",
+      "captions",
+      "logos",
+      "watermarks",
+      "player UI",
+      "storyboard panels",
+      "split screen",
+      "collage"
+    ],
+    "forbidden_editing_patterns": [
+      "rapid montage",
+      "hard jump cuts",
+      "identity drift",
+      "outfit changes",
+      "extra people"
+    ]
+  },
+  "segment_plan": [
+    {
+      "index": 0,
+      "intended_duration_s": 10,
+      "start_state": "Mira is seated at a small kitchen table beside a mug of tea in the early morning",
+      "action": "She rests her cheek on one hand, notices the camera, looks into the lens with a soft sleepy smile, and takes one small sip",
+      "camera_behavior": "Close handheld phone shot at conversational distance, slight natural sway, no cut",
+      "environment": "a warm, ordinary apartment kitchen with a wooden table and one window on the left",
+      "emotional_beat": "calm and unhurried",
+      "audio_intent": "quiet room tone, one soft clink of ceramic, no music",
+      "end_state": "She lowers the mug, sits up, and turns slightly toward the kitchen doorway",
+      "continuation_anchor": "her lowering the mug and turning slightly toward the kitchen doorway",
+      "max_distinct_actions": 3
+    },
+    {
+      "index": 1,
+      "intended_duration_s": 10,
+      "start_state": "Continue from her lowering the mug at the kitchen table",
+      "action": "She stands and walks toward the bedroom while the camera follows at walking pace, pauses once to push her hair back, then looks back over her shoulder",
+      "camera_behavior": "follows her at walking pace; the walking direction and the apartment geometry stay fixed",
+      "environment": "the same apartment, now moving from the kitchen through a short hallway toward the bedroom",
+      "emotional_beat": "warm and a little shy",
+      "audio_intent": "bare footsteps on a wooden floor, quiet room tone, no music",
+      "end_state": "She reaches the bedroom doorway and extends one hand back toward the camera",
+      "continuation_anchor": "her reaching the bedroom doorway and extending one hand back toward the camera",
+      "max_distinct_actions": 3
+    },
+    {
+      "index": 2,
+      "intended_duration_s": 10,
+      "start_state": "Continue from her hand reaching back at the bedroom doorway",
+      "action": "She guides the camera into the bedroom and sits on the edge of the bed, holds the mug with both hands for a moment, then leans closer and gently covers the lens with her open palm",
+      "camera_behavior": "moves closer slowly, staying handheld and intimate, with no cut",
+      "environment": "the same apartment bedroom, with a low bed, a folded blanket, and a small bedside lamp",
+      "emotional_beat": "playful and affectionate",
+      "audio_intent": "muffled room tone as the palm covers the lens, no music",
+      "end_state": "Her palm covers the lens and the frame goes dark",
+      "continuation_anchor": "her palm covering the lens and the frame going dark",
+      "max_distinct_actions": 3
+    }
+  ],
+  "interactions": [
+    {
+      "interaction_id": "3f2a71c8-5d64-4e19-9b03-7c1e5a8d2f60",
+      "parent_interaction_id": null,
+      "job_id": "job-20260921-091204-4f1c8a",
+      "segment_index": 0,
+      "attempt_index": 0,
+      "provider": "vertex",
+      "project": "example-homevlog-project",
+      "model": "gemini-omni-1.1-flash-preview",
+      "task": "reference_to_video",
+      "resolution": "720p",
+      "duration": "10s",
+      "request_started_at": "2026-09-21T09:16:11Z",
+      "request_completed_at": "2026-09-21T09:17:02Z",
+      "latency_s": 51.4,
+      "status": "completed",
+      "error_code": null,
+      "error_message": null,
+      "output_uri": "gs://example-homevlog-output/omni-output/jobs/job-20260921-091204-4f1c8a/renders/segment_00/attempt_00_raw.mp4",
+      "estimated_cost_usd": "0",
+      "outcome_known": true
+    },
+    {
+      "interaction_id": "a904bd13-2f77-4c58-8e61-1d0b7a35c9e2",
+      "parent_interaction_id": "3f2a71c8-5d64-4e19-9b03-7c1e5a8d2f60",
+      "job_id": "job-20260921-091204-4f1c8a",
+      "segment_index": 1,
+      "attempt_index": 0,
+      "provider": "vertex",
+      "project": "example-homevlog-project",
+      "model": "gemini-omni-1.1-flash-preview",
+      "task": "extend",
+      "resolution": "720p",
+      "duration": "10s",
+      "request_started_at": "2026-09-21T09:22:40Z",
+      "request_completed_at": "2026-09-21T09:23:29Z",
+      "latency_s": 48.7,
+      "status": "completed",
+      "error_code": null,
+      "error_message": null,
+      "output_uri": "gs://example-homevlog-output/omni-output/jobs/job-20260921-091204-4f1c8a/renders/segment_01/attempt_00_extend.mp4",
+      "estimated_cost_usd": "0",
+      "outcome_known": true
+    },
+    {
+      "interaction_id": "c17e53a0-6b28-4d94-a5f2-8e40c9b6d173",
+      "parent_interaction_id": "a904bd13-2f77-4c58-8e61-1d0b7a35c9e2",
+      "job_id": "job-20260921-091204-4f1c8a",
+      "segment_index": 2,
+      "attempt_index": 0,
+      "provider": "vertex",
+      "project": "example-homevlog-project",
+      "model": "gemini-omni-1.1-flash-preview",
+      "task": "extend",
+      "resolution": "720p",
+      "duration": "10s",
+      "request_started_at": "2026-09-21T09:29:05Z",
+      "request_completed_at": "2026-09-21T09:29:55Z",
+      "latency_s": 50.2,
+      "status": "completed",
+      "error_code": null,
+      "error_message": null,
+      "output_uri": "gs://example-homevlog-output/omni-output/jobs/job-20260921-091204-4f1c8a/renders/segment_02/attempt_00_extend.mp4",
+      "estimated_cost_usd": "0",
+      "outcome_known": true
+    }
+  ],
+  "quality_reports": [
+    {
+      "segment_index": 0,
+      "attempt_index": 0,
+      "reviewed_at": "2026-09-21T09:18:12Z",
+      "critic_model": "gemini-3.8-flash",
+      "report": {
+        "identity_score": 0.91,
+        "anatomy_score": 0.88,
+        "motion_score": 0.84,
+        "spatial_continuity_score": 0.9,
+        "camera_realism_score": 0.86,
+        "reference_fidelity_score": 0.83,
+        "text_overlay_detected": false,
+        "timestamp_detected": false,
+        "ui_detected": false,
+        "montage_detected": false,
+        "severe_defects": [],
+        "editable_defects": [],
+        "suggested_edit_prompt": null,
+        "anchor_usable": true,
+        "audio_continuity_score": 0.88,
+        "continuity_with_previous_score": 1.0,
+        "notes": [],
+        "verdict": "accept",
+        "critic_model": "gemini-3.8-flash",
+        "critic_degraded": false
+      },
+      "decision": {
+        "decision": "ACCEPT",
+        "reasons": [
+          "planned anchor: 'her lowering the mug and turning slightly toward the kitchen doorway'",
+          "all scores clear their thresholds and no defect was reported"
+        ],
+        "blocking": [],
+        "suggested_edit": null,
+        "critic_verdict_agrees": true
+      },
+      "thresholds_used": {
+        "accept_identity": 0.82,
+        "accept_anatomy": 0.78,
+        "accept_motion": 0.76,
+        "accept_camera_realism": 0.76,
+        "accept_spatial_continuity": 0.8,
+        "accept_continuity_with_previous": 0.75,
+        "accept_audio_continuity": 0.6,
+        "accept_reference_fidelity": 0.7,
+        "regenerate_identity_below": 0.55,
+        "regenerate_anatomy_below": 0.5,
+        "regenerate_spatial_below": 0.5,
+        "unstable_margin": 0.04,
+        "min_safe_edit_identity": 0.75,
+        "min_safe_edit_anatomy": 0.65,
+        "calibrated_at": "2026-09-21",
+        "calibration_note": "Initial hand-set values, inherited from the plan document. NOT calibrated against scored samples. Expect to move these after the first 20-30 reviewed renders."
+      },
+      "contradictions": []
+    },
+    {
+      "segment_index": 1,
+      "attempt_index": 0,
+      "reviewed_at": "2026-09-21T09:24:31Z",
+      "critic_model": "gemini-3.8-flash",
+      "report": {
+        "identity_score": 0.89,
+        "anatomy_score": 0.85,
+        "motion_score": 0.82,
+        "spatial_continuity_score": 0.88,
+        "camera_realism_score": 0.84,
+        "reference_fidelity_score": 0.81,
+        "text_overlay_detected": false,
+        "timestamp_detected": false,
+        "ui_detected": false,
+        "montage_detected": false,
+        "severe_defects": [],
+        "editable_defects": [],
+        "suggested_edit_prompt": null,
+        "anchor_usable": true,
+        "audio_continuity_score": 0.84,
+        "continuity_with_previous_score": 0.87,
+        "notes": [],
+        "verdict": "accept",
+        "critic_model": "gemini-3.8-flash",
+        "critic_degraded": false
+      },
+      "decision": {
+        "decision": "EXTEND",
+        "reasons": [
+          "planned anchor: 'her reaching the bedroom doorway and extending one hand back toward the camera'",
+          "segment accepted; extending"
+        ],
+        "blocking": [],
+        "suggested_edit": null,
+        "critic_verdict_agrees": true
+      },
+      "thresholds_used": {
+        "accept_identity": 0.82,
+        "accept_anatomy": 0.78,
+        "accept_motion": 0.76,
+        "accept_camera_realism": 0.76,
+        "accept_spatial_continuity": 0.8,
+        "accept_continuity_with_previous": 0.75,
+        "accept_audio_continuity": 0.6,
+        "accept_reference_fidelity": 0.7,
+        "regenerate_identity_below": 0.55,
+        "regenerate_anatomy_below": 0.5,
+        "regenerate_spatial_below": 0.5,
+        "unstable_margin": 0.04,
+        "min_safe_edit_identity": 0.75,
+        "min_safe_edit_anatomy": 0.65,
+        "calibrated_at": "2026-09-21",
+        "calibration_note": "Initial hand-set values, inherited from the plan document. NOT calibrated against scored samples. Expect to move these after the first 20-30 reviewed renders."
+      },
+      "contradictions": []
+    },
+    {
+      "segment_index": 2,
+      "attempt_index": 0,
+      "reviewed_at": "2026-09-21T09:31:08Z",
+      "critic_model": "gemini-3.8-flash",
+      "report": {
+        "identity_score": 0.9,
+        "anatomy_score": 0.86,
+        "motion_score": 0.83,
+        "spatial_continuity_score": 0.87,
+        "camera_realism_score": 0.85,
+        "reference_fidelity_score": 0.82,
+        "text_overlay_detected": false,
+        "timestamp_detected": false,
+        "ui_detected": false,
+        "montage_detected": false,
+        "severe_defects": [],
+        "editable_defects": [],
+        "suggested_edit_prompt": null,
+        "anchor_usable": true,
+        "audio_continuity_score": 0.8,
+        "continuity_with_previous_score": 0.86,
+        "notes": [],
+        "verdict": "accept",
+        "critic_model": "gemini-3.8-flash",
+        "critic_degraded": false
+      },
+      "decision": {
+        "decision": "EXTEND",
+        "reasons": [
+          "planned anchor: 'her palm covering the lens and the frame going dark'",
+          "segment accepted; extending"
+        ],
+        "blocking": [],
+        "suggested_edit": null,
+        "critic_verdict_agrees": true
+      },
+      "thresholds_used": {
+        "accept_identity": 0.82,
+        "accept_anatomy": 0.78,
+        "accept_motion": 0.76,
+        "accept_camera_realism": 0.76,
+        "accept_spatial_continuity": 0.8,
+        "accept_continuity_with_previous": 0.75,
+        "accept_audio_continuity": 0.6,
+        "accept_reference_fidelity": 0.7,
+        "regenerate_identity_below": 0.55,
+        "regenerate_anatomy_below": 0.5,
+        "regenerate_spatial_below": 0.5,
+        "unstable_margin": 0.04,
+        "min_safe_edit_identity": 0.75,
+        "min_safe_edit_anatomy": 0.65,
+        "calibrated_at": "2026-09-21",
+        "calibration_note": "Initial hand-set values, inherited from the plan document. NOT calibrated against scored samples. Expect to move these after the first 20-30 reviewed renders."
+      },
+      "contradictions": []
+    }
+  ],
+  "budget_events": [
+    {
+      "at": "2026-09-21T09:16:10Z",
+      "kind": "authorize",
+      "call_kind": "seed",
+      "segment_index": 0,
+      "attempt_index": 0,
+      "video_seconds": 10,
+      "estimated_cost_usd": "0",
+      "reason": null
+    },
+    {
+      "at": "2026-09-21T09:22:39Z",
+      "kind": "authorize",
+      "call_kind": "extend",
+      "segment_index": 1,
+      "attempt_index": 0,
+      "video_seconds": 10,
+      "estimated_cost_usd": "0",
+      "reason": null
+    },
+    {
+      "at": "2026-09-21T09:29:04Z",
+      "kind": "authorize",
+      "call_kind": "extend",
+      "segment_index": 2,
+      "attempt_index": 0,
+      "video_seconds": 10,
+      "estimated_cost_usd": "0",
+      "reason": null
+    }
+  ],
+  "budget": {
+    "max_total_calls": 8,
+    "calls_made": 3,
+    "remaining_calls": 5,
+    "video_seconds_requested": 30,
+    "max_video_seconds_requested": 90,
+    "estimated_cost_usd": "0",
+    "max_estimated_cost_usd": null
+  },
+  "segments": [
+    {
+      "interaction_id": "3f2a71c8-5d64-4e19-9b03-7c1e5a8d2f60",
+      "parent_interaction_id": null,
+      "task": "reference_to_video",
+      "model": "gemini-omni-1.1-flash-preview",
+      "provider": "vertex",
+      "project": "example-homevlog-project",
+      "segment_index": 0,
+      "status": "completed",
+      "local_path": "/srv/omni-vlog/.omni-vlog/jobs/job-20260921-091204-4f1c8a/renders/segment_00/attempt_00_raw.mp4",
+      "gcs_uri": "gs://example-homevlog-output/omni-output/jobs/job-20260921-091204-4f1c8a/renders/segment_00/attempt_00_raw.mp4",
+      "prompt_sha256": "a1f1d172e42bd38f3510441c9faf8c3b421205d2c720f4b3be0d094266092f36",
+      "prompt": "[# References <IMAGE_REF_0>@Image1 <IMAGE_REF_1>@Image2 <IMAGE_REF_2>@Image3]\n\nUse the supplied images only as identity, hairstyle, outfit, and home-environment references. Do not reproduce any borders, layout, text, timestamps, interface elements, or collage structure from the reference media.\n\nCreate one continuous 10-second vertical 9:16 realistic handheld smartphone shot from the boyfriend's point of view. Keep the same clearly adult woman throughout, with stable facial identity, hairstyle, accessories, outfit, body proportions, and natural skin texture.\n\nMira is seated at a small kitchen table beside a mug of tea in the early morning. She rests her cheek on one hand, notices the camera, looks into the lens with a soft sleepy smile, and takes one small sip. The setting is a warm, ordinary apartment kitchen with a wooden table and one window on the left. The mood stays calm and unhurried.\n\nThe camera behaves like a real phone held at close conversational distance: subtle hand movement, natural autofocus breathing, small exposure shifts, realistic motion blur, ordinary warm home lighting, and spontaneous behavior rather than posed commercial acting.\n\nEnd with her lowering the mug and turning slightly toward the kitchen doorway, holding that state naturally for the final moment so the scene can continue seamlessly.\n\nThe generated video contains no on-screen text, timestamps, shot numbers, subtitles, captions, logos, watermarks, player UI, storyboard panels, split screen, collage, rapid montage, hard jump cuts, identity drift, outfit changes, extra people.\n\nUse the given images as references for video generation. They must not be used as literal storyboard panels.",
+      "aspect_ratio": "9:16",
+      "resolution": "720p",
+      "requested_duration_s": 10,
+      "media": {
+        "container": "mov",
+        "duration_s": 10.0,
+        "width": 720,
+        "height": 1280,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "has_audio": true,
+        "size_bytes": 2411720,
+        "probed_with": "ffprobe",
+        "c2pa_present": true,
+        "c2pa_detail": [
+          "uuid box: c2pa"
+        ]
+      },
+      "usage": {
+        "text_input_tokens": 45,
+        "video_output_tokens": 19310,
+        "thought_tokens": 297
+      },
+      "created_at": "2026-09-21T09:16:11Z",
+      "completed_at": "2026-09-21T09:17:02Z",
+      "latency_s": 51.4,
+      "estimated_cost_usd": "0",
+      "artifact_relpath": "renders/segment_00/attempt_00_raw.mp4",
+      "derived": false,
+      "error_code": null,
+      "error_message": null
+    },
+    {
+      "interaction_id": "a904bd13-2f77-4c58-8e61-1d0b7a35c9e2",
+      "parent_interaction_id": "3f2a71c8-5d64-4e19-9b03-7c1e5a8d2f60",
+      "task": "extend",
+      "model": "gemini-omni-1.1-flash-preview",
+      "provider": "vertex",
+      "project": "example-homevlog-project",
+      "segment_index": 1,
+      "status": "completed",
+      "local_path": "/srv/omni-vlog/.omni-vlog/jobs/job-20260921-091204-4f1c8a/renders/segment_01/attempt_00_extend.mp4",
+      "gcs_uri": "gs://example-homevlog-output/omni-output/jobs/job-20260921-091204-4f1c8a/renders/segment_01/attempt_00_extend.mp4",
+      "prompt_sha256": "b7f669d2d52c989aae5a55194cfde4aa5290419258a33a95d4dd409ef5def154",
+      "prompt": "Continue directly from the exact final moment of the previous video. Preserve the same woman, face, hair, accessories, outfit, room layout, lighting, handheld phone position, motion direction, and audio atmosphere.\n\nOver the next 10 seconds, She stands and walks toward the bedroom while the camera follows at walking pace, pauses once to push her hair back, then looks back over her shoulder. The setting remains the same apartment, now moving from the kitchen through a short hallway toward the bedroom. Keep this as one continuous natural moment with no montage and no abrupt scene reset.\n\nThe previous final pose must flow physically into the new movement. Do not reintroduce the character, do not restart the story, and do not change the apartment geometry.\n\nThe camera continues handheld and now follows her at walking pace; the walking direction and the apartment geometry stay fixed.\n\nEnd with her reaching the bedroom doorway and extending one hand back toward the camera.\n\nNo on-screen text, timestamp, subtitle, caption, logo, watermark, interface, storyboard layout, split screen, collage, rapid cuts, new person, face drift, clothing change, or sudden lighting change.\n\nThe previous video ended with: her lowering the mug and turning slightly toward the kitchen doorway. Begin from exactly that state.",
+      "aspect_ratio": "9:16",
+      "resolution": "720p",
+      "requested_duration_s": 10,
+      "media": {
+        "container": "mov",
+        "duration_s": 10.0,
+        "width": 720,
+        "height": 1280,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "has_audio": true,
+        "size_bytes": 2388544,
+        "probed_with": "ffprobe",
+        "c2pa_present": true,
+        "c2pa_detail": [
+          "uuid box: c2pa"
+        ]
+      },
+      "usage": {
+        "text_input_tokens": 118,
+        "video_output_tokens": 19204,
+        "thought_tokens": 302
+      },
+      "created_at": "2026-09-21T09:22:40Z",
+      "completed_at": "2026-09-21T09:23:29Z",
+      "latency_s": 48.7,
+      "estimated_cost_usd": "0",
+      "artifact_relpath": "renders/segment_01/attempt_00_extend.mp4",
+      "derived": false,
+      "error_code": null,
+      "error_message": null
+    },
+    {
+      "interaction_id": "c17e53a0-6b28-4d94-a5f2-8e40c9b6d173",
+      "parent_interaction_id": "a904bd13-2f77-4c58-8e61-1d0b7a35c9e2",
+      "task": "extend",
+      "model": "gemini-omni-1.1-flash-preview",
+      "provider": "vertex",
+      "project": "example-homevlog-project",
+      "segment_index": 2,
+      "status": "completed",
+      "local_path": "/srv/omni-vlog/.omni-vlog/jobs/job-20260921-091204-4f1c8a/renders/segment_02/attempt_00_extend.mp4",
+      "gcs_uri": "gs://example-homevlog-output/omni-output/jobs/job-20260921-091204-4f1c8a/renders/segment_02/attempt_00_extend.mp4",
+      "prompt_sha256": "63da0ee7cb24b2273a076fee632262763436c9f3aa94a68d4f49797f0ffac8fd",
+      "prompt": "Continue directly from the exact final moment of the previous video. Preserve the same woman, face, hair, accessories, outfit, room layout, lighting, handheld phone position, motion direction, and audio atmosphere.\n\nOver the next 10 seconds, She guides the camera into the bedroom and sits on the edge of the bed, holds the mug with both hands for a moment, then leans closer and gently covers the lens with her open palm. The setting remains the same apartment bedroom, with a low bed, a folded blanket, and a small bedside lamp. Keep this as one continuous natural moment with no montage and no abrupt scene reset.\n\nThe previous final pose must flow physically into the new movement. Do not reintroduce the character, do not restart the story, and do not change the apartment geometry.\n\nThe camera continues handheld and now moves closer slowly, staying handheld and intimate, with no cut.\n\nEnd with her palm covering the lens and the frame going dark.\n\nNo on-screen text, timestamp, subtitle, caption, logo, watermark, interface, storyboard layout, split screen, collage, rapid cuts, new person, face drift, clothing change, or sudden lighting change.\n\nThe previous video ended with: her reaching the bedroom doorway and extending one hand back toward the camera. Begin from exactly that state.",
+      "aspect_ratio": "9:16",
+      "resolution": "720p",
+      "requested_duration_s": 10,
+      "media": {
+        "container": "mov",
+        "duration_s": 9.9,
+        "width": 720,
+        "height": 1280,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "has_audio": true,
+        "size_bytes": 2364928,
+        "probed_with": "ffprobe",
+        "c2pa_present": true,
+        "c2pa_detail": [
+          "uuid box: c2pa"
+        ]
+      },
+      "usage": {
+        "text_input_tokens": 121,
+        "video_output_tokens": 19012,
+        "thought_tokens": 288
+      },
+      "created_at": "2026-09-21T09:29:05Z",
+      "completed_at": "2026-09-21T09:29:55Z",
+      "latency_s": 50.2,
+      "estimated_cost_usd": "0",
+      "artifact_relpath": "renders/segment_02/attempt_00_extend.mp4",
+      "derived": false,
+      "error_code": null,
+      "error_message": null
+    }
+  ],
+  "final_path": "/srv/omni-vlog/.omni-vlog/jobs/job-20260921-091204-4f1c8a/final/final.mp4",
+  "final_derived": false,
+  "c2pa_present": true,
+  "synthid_expected": true,
+  "degraded_cross_project_resume": false,
+  "capability_snapshot": null,
+  "state_history": [
+    {
+      "from": "CREATED",
+      "to": "REFERENCES_VALIDATED",
+      "at": "2026-09-21T09:14:37Z",
+      "note": "3 references accepted"
+    },
+    {
+      "from": "REFERENCES_VALIDATED",
+      "to": "PLAN_READY",
+      "at": "2026-09-21T09:15:20Z",
+      "note": "planned 3 segments"
+    },
+    {
+      "from": "PLAN_READY",
+      "to": "SEED_RENDERING",
+      "at": "2026-09-21T09:16:10Z",
+      "note": "seed render starting"
+    },
+    {
+      "from": "SEED_RENDERING",
+      "to": "SEED_REVIEW",
+      "at": "2026-09-21T09:17:03Z",
+      "note": "seed rendered; awaiting review"
+    },
+    {
+      "from": "SEED_REVIEW",
+      "to": "SEED_ACCEPTED",
+      "at": "2026-09-21T09:18:14Z",
+      "note": "seed accepted"
+    },
+    {
+      "from": "SEED_ACCEPTED",
+      "to": "EXTENSION_1_RENDERING",
+      "at": "2026-09-21T09:22:39Z",
+      "note": "extending from 3f2a71c8-5d64-4e19-9b03-7c1e5a8d2f60 (strategy C)"
+    },
+    {
+      "from": "EXTENSION_1_RENDERING",
+      "to": "EXTENSION_1_REVIEW",
+      "at": "2026-09-21T09:23:30Z",
+      "note": "extension 1 rendered; awaiting review"
+    },
+    {
+      "from": "EXTENSION_1_REVIEW",
+      "to": "EXTENSION_1_ACCEPTED",
+      "at": "2026-09-21T09:24:33Z",
+      "note": "extension 1 accepted"
+    },
+    {
+      "from": "EXTENSION_1_ACCEPTED",
+      "to": "EXTENSION_2_RENDERING",
+      "at": "2026-09-21T09:29:04Z",
+      "note": "extending from a904bd13-2f77-4c58-8e61-1d0b7a35c9e2 (strategy C)"
+    },
+    {
+      "from": "EXTENSION_2_RENDERING",
+      "to": "EXTENSION_2_REVIEW",
+      "at": "2026-09-21T09:29:57Z",
+      "note": "extension 2 rendered; awaiting review"
+    },
+    {
+      "from": "EXTENSION_2_REVIEW",
+      "to": "EXTENSION_2_ACCEPTED",
+      "at": "2026-09-21T09:31:10Z",
+      "note": "extension 2 accepted"
+    },
+    {
+      "from": "EXTENSION_2_ACCEPTED",
+      "to": "FINAL_REVIEW",
+      "at": "2026-09-21T09:31:11Z",
+      "note": "extension 2 accepted; chain complete"
+    },
+    {
+      "from": "FINAL_REVIEW",
+      "to": "FINAL_REVIEW",
+      "at": "2026-09-21T09:38:52Z",
+      "note": "approved:final",
+      "reason": "watched the full chain end to end; the three joins read as one take"
+    },
+    {
+      "from": "FINAL_REVIEW",
+      "to": "COMPLETE",
+      "at": "2026-09-21T09:41:37Z",
+      "note": "finalized"
+    }
+  ],
+  "notes": [
+    "final approval gate is enabled; run `omni-vlog approve job-20260921-091204-4f1c8a --stage final` then `omni-vlog resume` to complete",
+    "finalized to /srv/omni-vlog/.omni-vlog/jobs/job-20260921-091204-4f1c8a/final/final.mp4 (derived=False)",
+    "exported to /srv/omni-vlog/exports/final.mp4"
+  ],
+  "errors": []
+}

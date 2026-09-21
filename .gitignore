@@ -1,0 +1,95 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Credentials. Nothing in this section may ever be committed.
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# `.env.example` is the one exception: it is a template of names, never values.
+
+.env
+.env.*
+!.env.example
+
+# Service-account JSON keys, under every name people actually use for them.
+# The `*` prefixes matter: a key downloaded from the Cloud console lands as
+# `<project>-<hash>.json`, which matches none of the suffix-only patterns.
+*.json.key
+*.key
+*-service-account*.json
+*service-account*.json
+service-account*.json
+*-sa-key*.json
+*_sa_key*.json
+
+# Application Default Credentials, wherever gcloud puts them or points at them.
+application_default_credentials.json
+**/application_default_credentials.json
+
+# Other Google credential artefacts.
+client_secret*.json
+credentials.json
+token.json
+*.pem
+*.p12
+*.pfx
+.netrc
+secrets/
+secrets.yaml
+secrets.yml
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Per-deployment artifacts
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# `CAPABILITY_REPORT.md` is produced by `omni-vlog doctor`, not written by hand.
+# It names the project it was run against (sanitised, but recognisably), carries
+# that run's timestamps, and quotes live interaction data. That is deployment
+# detail, not source: regenerate it with `omni-vlog doctor` rather than committing
+# one machine's result into a repository about the tool.
+CAPABILITY_REPORT.md
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Job data and generated media
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# These contain provider responses, prompts, and renders. They are not secrets,
+# but they are large, they are per-machine, and a debug fixture can carry a raw
+# interaction payload. Regenerate them rather than committing them.
+
+.omni-vlog/
+outputs/
+exports/
+jobs/
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.avi
+*.tmp
+*.concat.txt
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Python
+# ══════════════════════════════════════════════════════════════════════════════
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OS / editor
+# ══════════════════════════════════════════════════════════════════════════════
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

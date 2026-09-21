@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "omni-homevlog"
+version = "0.1.0"
+description = "Continuity-preserving home-vlog video agent on top of Gemini Omni via the Interactions API"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "typer>=0.12",
+    "rich>=13.9",
+    "PyYAML>=6.0",
+    "requests>=2.32",
+    "google-auth>=2.35",
+    "Pillow>=10.4",
+]
+
+[project.optional-dependencies]
+# The google-genai SDK path is optional: the verified Vertex transport is REST + ADC
+# (see docs/CAPABILITY_REPORT.md). Install this only if you want the SDK transport.
+sdk = ["google-genai>=2.24"]
+gcs = ["google-cloud-storage>=2.18"]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "types-requests>=2.32",
+    "types-PyYAML>=6.0",
+]
+
+[project.scripts]
+omni-vlog = "omni_homevlog.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/omni_homevlog"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["E501", "B008", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+strict = true
+warn_unreachable = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["google.auth.*", "google.cloud.*", "google.genai.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "live: hits a real paid provider API; requires RUN_LIVE_VIDEO_TESTS=1",
+]
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:omni_homevlog.*"]

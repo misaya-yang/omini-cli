@@ -1,0 +1,133 @@
+# Quality regression set (§21.4).
+#
+# §21.4 fixes five scene types and requires that after every SDK or model update,
+# someone runs a manual A/B comparison against them. The plan is explicit that
+# automated scores are not the sole evidence: "每次 SDK/model 更新后跑一次人工 A/B，
+# 不把自动分数当唯一证据".
+#
+# So this file is a *checklist*, not a test suite. `tests/live/test_quality_regression.py`
+# can drive it to produce renders and collect the Critic's scores, but the pass/fail
+# judgement at the end is a person watching the five clips side by side.
+#
+# Why these five: each isolates one capability the continuity story depends on.
+#
+#   1. drinking from a cup        — fine object contact, hand anatomy
+#   2. standing up                — a whole-body transition, weight and balance
+#   3. short walk                 — camera following, motion continuity
+#   4. table -> bedroom           — space traversal, the hardest continuity case
+#   5. hand covers the lens       — end-anchor quality, the payoff shot
+#
+# Record results in the table at the bottom. A regression is any clip that is
+# clearly worse than the previous run's, not any clip that scores below a threshold.
+
+version: 1
+updated_at: "2026-09-21"
+note: >-
+  Uncalibrated. The prompts are deliberately short and neutral: they are a
+  regression baseline, not a showcase, so that a change in output is attributable
+  to the model rather than to a prompt edit.
+
+settings:
+  # Cheapest settings that still show the behaviour. Raise to 720p for a
+  # release-grade comparison; 360p is enough to catch a structural regression.
+  duration_s: 5
+  resolution: 360p
+  aspect_ratio: "9:16"
+  audio: true
+
+scenes:
+  - id: cup-sip
+    name: "single person drinks from a cup"
+    exercises: [object_contact, hand_anatomy, facial_identity]
+    prompt: >-
+      A close handheld phone shot of a woman seated at a small table. She lifts a
+      ceramic mug with one hand and takes a small sip, then lowers it. Warm indoor
+      light, natural skin texture, one continuous take.
+    watch_for:
+      - do the fingers wrap the handle plausibly, or fuse into it
+      - does the mug change size or shape between frames
+      - is the sip physically connected to the mouth
+
+  - id: stand-up
+    name: "single person stands up"
+    exercises: [whole_body_motion, weight_and_balance, camera_follow]
+    prompt: >-
+      A handheld phone shot of a woman seated in a chair. She leans forward and
+      stands up naturally, ending upright and facing the camera. One continuous
+      take, no cut.
+    watch_for:
+      - does the body move as one piece, or do limbs slide independently
+      - does the chair stay put
+      - does the camera stay at a believable conversational height
+
+  - id: short-walk
+    name: "single person walks a short distance"
+    exercises: [gait, motion_continuity, handheld_realism]
+    prompt: >-
+      A handheld phone follows a woman walking a few steps across a small living
+      room, staying behind and slightly to one side. One continuous take, natural
+      walking speed, no cut.
+    watch_for:
+      - does the gait read as walking rather than gliding
+      - does the background parallax match the movement
+      - does the frame stay plausibly handheld
+
+  - id: table-to-bedroom
+    name: "person moves from the dining table into the bedroom"
+    exercises: [space_traversal, environment_topology, identity_under_motion]
+    prompt: >-
+      A handheld phone follows a woman as she stands from a dining table and walks
+      into an adjoining bedroom, passing through a doorway. One continuous take,
+      the same apartment throughout, no cut.
+    watch_for:
+      - is the doorway in the same place it was before she reached it
+      - does the room she enters connect to the room she left
+      - does her face stay the same person across the transition
+
+  - id: lens-cover
+    name: "person reaches toward the camera and covers the lens"
+    exercises: [end_anchor, hand_to_camera_depth, audio_transition]
+    prompt: >-
+      A handheld phone shot of a woman sitting close to the camera. She smiles,
+      leans forward, and gently covers the lens with her palm until the picture
+      goes dark. One continuous take.
+    watch_for:
+      - does the hand grow in scale as it approaches, or pop to full size
+      - is the blackout gradual and caused by the hand
+      - does the audio fade in a way that matches the action
+    note: >-
+      This is the 30-second chain's payoff shot. It also produces the end anchor
+      for the final segment, so a bad result here breaks the chain's ending.
+
+# ── results ──────────────────────────────────────────────────────────────────
+#
+# One block per run. Keep old blocks: the comparison is against the previous run,
+# not against an absolute standard.
+#
+# runs:
+#   - date: "2026-09-21"
+#     model: gemini-omni-1.1-flash-preview
+#     sdk: google-genai 2.24.0
+#     reviewer: "<initials>"
+#     results:
+#       cup-sip:          {verdict: pass,  note: "hands clean"}
+#       stand-up:         {verdict: pass,  note: ""}
+#       short-walk:       {verdict: watch, note: "slight float in the gait"}
+#       table-to-bedroom: {verdict: fail,  note: "doorway moved between steps"}
+#       lens-cover:       {verdict: pass,  note: "blackout reads naturally"}
+#     summary: "One regression vs. the 2026-09-14 run, in space traversal."
+runs: []
+
+# Criteria for judging a clip, in order of how much they matter to this project.
+judging_order:
+  - identity:     "Is it recognisably the same person as the reference photos?"
+  - continuity:   "Does it continue from the previous clip's final moment?"
+  - anatomy:      "Hands, fingers, limbs, and contact with objects."
+  - space:        "Is the room the same room, with the same geometry?"
+  - artefacts:    "Any text, timestamp, UI, or storyboard structure? Any is a fail."
+  - realism:      "Does it read as a phone held by a person, or as a synthetic camera?"
+  - motion:       "Does movement read as continuous and physically plausible?"
+
+# A single `fail` on identity, continuity, or artefacts is a release blocker
+# regardless of how the other clips scored.
+blocking_criteria: [identity, continuity, artefacts]

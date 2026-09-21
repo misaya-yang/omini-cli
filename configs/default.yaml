@@ -1,0 +1,40 @@
+# Defaults for omni-homevlog.
+#
+# Precedence: CLI flags > environment > this file > code defaults.
+#
+# Every key here has a matching field on `omni_homevlog.config.Settings`.
+# This file is intentionally small: anything that identifies a *project*,
+# *bucket*, or *credential* belongs in the environment, not in version control.
+
+# ── Vertex / Agent Platform ─────────────────────────────────────────────────
+google_cloud_location: global
+omni_vertex_model: gemini-omni-1.1-flash-preview
+
+# `delivery: "uri"` requires a gcs_uri; the API rejects the combination
+# otherwise. Leave this null to use inline base64 delivery.
+omni_output_gcs_uri: null
+omni_prefer_gcs_delivery: true
+
+# ── Planning / review models ────────────────────────────────────────────────
+# Omni is a video model: no system instruction, no structured output. Planning
+# and critique therefore run on separate JSON-capable models.
+director_model: gemini-3.8-flash
+critic_model: gemini-3.8-flash
+
+# ── Storage ─────────────────────────────────────────────────────────────────
+omni_data_dir: ./.omni-vlog
+omni_ffmpeg_bin: ffmpeg
+omni_ffprobe_bin: ffprobe
+
+# ── Cost control ────────────────────────────────────────────────────────────
+omni_max_total_calls: 8
+omni_max_estimated_cost_usd: null
+omni_pricing_file: pricing.yaml
+
+# ── Switches ────────────────────────────────────────────────────────────────
+run_live_video_tests: false
+omni_keep_raw_responses: true
+omni_log_level: INFO
+# Video calls routinely exceed a minute; the handoff measured 26.5s for a 3s
+# clip. 600s matches the documented 10-minute synchronous ceiling.
+omni_request_timeout_s: 600

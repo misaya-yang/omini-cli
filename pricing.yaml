@@ -1,0 +1,39 @@
+# Pricing inputs for the *estimate* shown in `omni-vlog status` and the manifest.
+#
+# §12.2: never hardcode prices as permanent facts. Billing is the source of
+# truth; everything here produces an ESTIMATE only. When a number changes,
+# update it here and bump `updated_at`.
+#
+# §24.14: no quota, price, or region availability in this project may be
+# treated as permanent. The probe re-checks availability; this file only
+# carries the money arithmetic.
+
+updated_at: "2026-09-21"
+source: "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+disclaimer: >-
+  ESTIMATE ONLY. Preview models change price and quota without notice. The
+  Cloud Billing export is authoritative.
+
+currency: USD
+
+models:
+  gemini-omni-1.1-flash-preview:
+    # Video models bill on output video tokens. The handoff's verified 3s/360p
+    # smoke produced 5,793 video output tokens for a 3-second clip, which is the
+    # basis for `video_tokens_per_second` below.
+    video_output_usd_per_1k_tokens: 0.0
+    text_input_usd_per_1k_tokens: 0.0
+    video_tokens_per_second: 1931
+    note: >-
+      Placeholder rates. Fill in from the current pricing page before relying on
+      the cost estimate; leaving them at 0 makes the estimate read as 0.00, which
+      is honest about being unknown but useless for budgeting. The token *count*
+      estimate is still produced and stored in the manifest either way.
+  gemini-omni-1.1-flash:
+    video_output_usd_per_1k_tokens: 0.0
+    text_input_usd_per_1k_tokens: 0.0
+    video_tokens_per_second: 1931
+    note: "Gemini Developer API surface. Same caveat as above."
+
+# Flat per-call adder if the surface ever bills per request rather than per token.
+per_call_usd: 0.0

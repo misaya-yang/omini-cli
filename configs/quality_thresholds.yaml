@@ -1,0 +1,41 @@
+# Decision-policy thresholds (§11.5).
+#
+# These are POLICY KNOBS, not measurements. The plan is explicit: "阈值必须配置化，
+# 并通过实际样本校准，不得宣称为客观质量标准" — the scores feeding them come from a
+# vision model making heuristic judgements, and the thresholds themselves have
+# not been calibrated against scored samples.
+#
+# Treat a threshold change as a product decision, not a bug fix. When you tune
+# these, update `calibrated_at` and `calibration_note`.
+
+# ── ACCEPT gate (§11.5) ────────────────────────────────────────────────────
+accept_identity: 0.82
+accept_anatomy: 0.78
+accept_motion: 0.76
+accept_camera_realism: 0.76
+accept_spatial_continuity: 0.80
+accept_continuity_with_previous: 0.75
+accept_audio_continuity: 0.60
+accept_reference_fidelity: 0.70
+
+# ── Regenerate rather than repair ───────────────────────────────────────────
+# Below these, a local edit cannot rescue the shot (§11.4).
+regenerate_identity_below: 0.55
+regenerate_anatomy_below: 0.50
+regenerate_spatial_below: 0.50
+
+# ── Instability band ────────────────────────────────────────────────────────
+# A score inside [threshold - margin, threshold) means the Critic is on the
+# fence; §11.4 sends those to a human rather than spending another call.
+unstable_margin: 0.04
+
+# ── Is an edit safe? ────────────────────────────────────────────────────────
+# An edit is only offered when the parts we are NOT changing are already good.
+min_safe_edit_identity: 0.75
+min_safe_edit_anatomy: 0.65
+
+calibrated_at: "2026-09-21"
+calibration_note: >-
+  Initial hand-set values, inherited from the plan document. NOT calibrated
+  against scored samples. Expect to move these after the first 20-30 reviewed
+  renders.
