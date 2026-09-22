@@ -37,6 +37,8 @@ class JobMetrics:
     identity_failures: int = 0
     contamination_detections: int = 0
     generated_seconds: float = 0.0
+    final_duration_s: float | None = None
+    output_version_seconds: float = 0.0
     estimated_cost_usd: Decimal = Decimal("0")
     durations: list[float] = field(default_factory=list)
 
@@ -71,6 +73,8 @@ class JobMetrics:
             "identity_failures": self.identity_failures,
             "contamination_detections": self.contamination_detections,
             "generated_seconds": round(self.generated_seconds, 2),
+            "final_duration_s": self.final_duration_s,
+            "output_version_seconds": self.output_version_seconds,
             "estimated_cost_usd": str(self.estimated_cost_usd),
         }
 
@@ -99,9 +103,14 @@ def collect_job_metrics(manifest: Manifest, *, db: Database | None = None) -> Jo
 
     for artifact in manifest.segment_artifacts():
         if artifact.media and artifact.media.duration_s:
-            metrics.generated_seconds += artifact.media.duration_s
+            metrics.output_version_seconds += artifact.media.duration_s
             metrics.durations.append(artifact.media.duration_s)
 
+    metrics.generated_seconds = sum(
+        e.video_seconds for e in manifest.budget_events if e.kind == "authorize"
+    )
+    last = manifest.last_usable_artifact()
+    metrics.final_duration_s = last.media.duration_s if last and last.media else None
     for entry in manifest.quality_reports:
         report = entry.get("report")
         if not isinstance(report, dict):

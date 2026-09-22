@@ -32,7 +32,7 @@ from typing import Any
 
 from omni_homevlog.agents.llm import InlineImage, TextModelClient, build_client
 from omni_homevlog.config import Settings, get_settings
-from omni_homevlog.errors import InvalidRequestError
+from omni_homevlog.errors import OmniVlogError
 from omni_homevlog.media.extract_frames import FrameSet, extract_frames
 from omni_homevlog.media.ffprobe import inspect_media
 from omni_homevlog.observability.logging import get_logger
@@ -176,7 +176,21 @@ class Critic:
 
             if self.extract_frames_when_missing:
                 out_dir = Path(frames_dir) if frames_dir else video.parent / "review_frames"
-                inputs.frame_set = extract_frames(video, out_dir, width=REVIEW_FRAME_WIDTH)
+                from omni_homevlog.media.extract_frames import DEFAULT_FRACTIONS
+
+                fractions = DEFAULT_FRACTIONS
+                if is_extension and previous_video_path and info.duration_s:
+                    prior = inspect_media(previous_video_path).duration_s
+                    if prior and prior < info.duration_s:
+                        start = max(0.0, prior - 1.0) / info.duration_s
+                        fractions = tuple(start + f * (1 - start) for f in DEFAULT_FRACTIONS)
+                        inputs.segment_prompt = (
+                            (segment_prompt or "")
+                            + f"\nThe video is cumulative. Evaluate the new action after {prior:.2f}s, including the join from {max(0, prior - 1):.2f}s; earlier actions are history."
+                        )
+                inputs.frame_set = extract_frames(
+                    video, out_dir, fractions=fractions, width=REVIEW_FRAME_WIDTH
+                )
 
         if is_extension and previous_video_path:
             previous = Path(previous_video_path)
@@ -204,25 +218,42 @@ class Critic:
         """Run one review. Never returns an unmarked pass on thin evidence."""
         reasons = inputs.unavailability_reasons()
         images = self._collect_images(inputs)
+        expected_images = (
+            (len(inputs.frame_set.frames) if inputs.frame_set else 0)
+            + (len(inputs.previous_frames.frames) if inputs.previous_frames else 0)
+            + len(inputs.reference_paths)
+        )
+        if len(images) < expected_images:
+            reasons.append(
+                f"only {len(images)} of {expected_images} expected frames/references were attached"
+            )
+        video_attached = False
+        audio_attached = False
+        if (
+            inputs.video_path
+            and inputs.video_path.is_file()
+            and inputs.video_path.stat().st_size <= 18_000_000
+        ):
+            info = inspect_media(inputs.video_path)
+            if info.is_usable:
+                images.append(
+                    InlineImage(
+                        data_b64=base64.b64encode(inputs.video_path.read_bytes()).decode("ascii"),
+                        mime_type="video/mp4",
+                    )
+                )
+                video_attached = True
+                audio_attached = bool(info.has_audio)
+        if not video_attached:
+            reasons.append("full video could not be attached (missing, invalid, or above 18 MB)")
 
         prompt = render_critic_prompt(
             segment=inputs.segment,
             bible=inputs.bible,
             is_extension=inputs.is_extension,
             has_previous_frames=bool(inputs.previous_frames and inputs.previous_frames.frames),
-            # These two describe what the model can *perceive*, not what exists on
-            # disk. `_collect_images` attaches base64 keyframes and nothing else,
-            # and the text client has no path for video or audio bytes — so the
-            # model never sees the clip and never hears the track.
-            #
-            # Passing `inputs.has_video()` here told the Critic it had "the full
-            # video clip" and "the video's audio track" on every single review.
-            # That suppressed the prompt's own anti-fabrication note (which fires
-            # only when `not has_video`), so it reported motion and audio scores it
-            # had invented from stills — and the decision policy authorised paid
-            # extensions on those numbers.
-            has_video=False,
-            has_audio=False,
+            has_video=video_attached,
+            has_audio=audio_attached,
             frame_labels=inputs.frame_labels(),
             local_media_summary=inputs.local_media_summary,
             segment_prompt=inputs.segment_prompt,
@@ -239,7 +270,7 @@ class Critic:
             report = parse_critic_response(response.text, critic_model=response.model)
             usage = response.usage
             raw_text = response.text
-        except InvalidRequestError as exc:
+        except OmniVlogError as exc:
             # A Critic we cannot parse must not become an implicit pass (§21.2).
             logger.error(
                 "Critic returned unparseable output; forcing human review",

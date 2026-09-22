@@ -107,6 +107,7 @@ def build_provider(
         "gcs_prefix": gcs_prefix,
         "prefer_gcs_delivery": cfg.omni_prefer_gcs_delivery,
         "timeout_s": cfg.omni_request_timeout_s,
+        "query_timeout_s": cfg.omni_query_timeout_s,
         "keep_raw": cfg.omni_keep_raw_responses,
     }
 

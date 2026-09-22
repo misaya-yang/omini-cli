@@ -53,6 +53,7 @@ class GeminiDeveloperProvider(BaseVideoProvider):
             api_key=api_key,
             base_url=base_url,
             timeout_s=kwargs.pop("timeout_s", 600.0),
+            query_timeout_s=kwargs.pop("query_timeout_s", 60.0),
             keep_raw=kwargs.pop("keep_raw", True),
         )
         super().__init__(
@@ -82,7 +83,7 @@ class GeminiDeveloperProvider(BaseVideoProvider):
         `previous_interaction_id` PASS with `apply_continuation_rule=False`, this
         default is wrong and should be flipped with the measurement recorded.
         """
-        is_continuation = bool(request.parent_interaction_id)
+        is_continuation = bool(request.parent_interaction_id) and not (request.input_video_uri or request.input_video)
         return super().build_payload(
             request,
             include_generation_config=(
@@ -93,7 +94,11 @@ class GeminiDeveloperProvider(BaseVideoProvider):
     def chain_strategy(self, caps: ProviderCapabilities | None) -> str:
         """Same preference order as Vertex, with the same refusal at the end."""
         if caps is None:
-            return "C"
+            from omni_homevlog.errors import CapabilityMissingError
+
+            raise CapabilityMissingError(
+                "Native continuation has not been probed for this surface."
+            )
         if caps.stateful_previous_interaction_id:
             return "A"
         if caps.stateful_steps_replay:
@@ -107,6 +112,9 @@ class GeminiDeveloperProvider(BaseVideoProvider):
             "fall back to concatenating independent generations (§24.3).",
             detail={"provider": self.provider_name, "model": self.model},
         )
+
+    def needs_video_input(self) -> bool:
+        return self.chain_strategy(self.capabilities) == "C"
 
     async def probe(self) -> ProviderCapabilities:
         from omni_homevlog.providers.capability_probe import probe_provider

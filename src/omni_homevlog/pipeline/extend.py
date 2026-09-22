@@ -32,7 +32,6 @@ from omni_homevlog.pipeline.render_seed import _persist as persist_artifact
 from omni_homevlog.pipeline.render_seed import (
     _record_failed_interaction,
     _record_unknown_outcome,
-    clear_dispatch_pending,
     record_dispatch_pending,
 )
 from omni_homevlog.schemas import JobState, RenderArtifact, SegmentPlan
@@ -128,7 +127,11 @@ def run_extend(
     )
 
     record_dispatch_pending(
-        ctx, segment_index=segment_index, attempt_index=attempt_index, task="extend"
+        ctx,
+        segment_index=segment_index,
+        attempt_index=attempt_index,
+        task="extend",
+        parent_interaction_id=previous_artifact.interaction_id,
     )
 
     import asyncio
@@ -148,6 +151,8 @@ def run_extend(
         _record_unknown_outcome(
             ctx, segment_index=segment_index, attempt_index=attempt_index, exc=exc
         )
+        if exc.code == "interaction_pending":
+            raise
         ctx.manifest = ctx.store.transition(
             target=JobState.NEEDS_HUMAN,
             note=(
@@ -163,7 +168,6 @@ def run_extend(
         ctx.error(f"extension failed: {exc}")
         raise
 
-    clear_dispatch_pending(ctx, segment_index=segment_index, attempt_index=attempt_index)
     persist_artifact(
         ctx,
         artifact,
@@ -240,11 +244,14 @@ def chain_summary(ctx: JobContext) -> list[dict[str, object]]:
 
 
 def chain_total_seconds(ctx: JobContext) -> float:
-    total = 0.0
-    for artifact in ctx.manifest.segment_artifacts():
-        if artifact.media and artifact.media.duration_s:
-            total += artifact.media.duration_s
-    return total
+    """Duration of the latest cumulative film, not the sum of its versions.
+
+    Requested generation seconds are accounted for separately by the budget.
+    """
+    artifact = ctx.manifest.last_usable_artifact()
+    if artifact is not None and artifact.media is not None:
+        return artifact.media.duration_s or 0.0
+    return 0.0
 
 
 def verify_chain_continuity(ctx: JobContext) -> tuple[bool, list[str]]:
@@ -261,7 +268,16 @@ def verify_chain_continuity(ctx: JobContext) -> tuple[bool, list[str]]:
         return False, ["no usable segments"]
 
     for previous, current in itertools.pairwise(artifacts):
-        if current.parent_interaction_id != previous.interaction_id:
+        parent = current.parent_interaction_id
+        records = {r.interaction_id: r for r in ctx.manifest.interactions}
+        seen: set[str] = set()
+        while parent != previous.interaction_id and parent in records and parent not in seen:
+            seen.add(parent)
+            record = records[parent]
+            if record.segment_index != current.segment_index:
+                break
+            parent = record.parent_interaction_id
+        if parent != previous.interaction_id:
             problems.append(
                 f"segment {current.interaction_id} names parent "
                 f"{current.parent_interaction_id!r} but follows "
@@ -289,4 +305,18 @@ def verify_chain_continuity(ctx: JobContext) -> tuple[bool, list[str]]:
             "the chain starts with an edit that names no parent, so there is no seed underneath it"
         )
 
+    expected_count = 1 if ctx.spec.mode == "concept" else ctx.spec.extension_count + 1
+    if len(artifacts) != expected_count:
+        problems.append(f"expected {expected_count} accepted segments, got {len(artifacts)}")
+    for index, artifact in enumerate(artifacts):
+        if (artifact.provider, artifact.project, artifact.model) != (
+            ctx.manifest.provider,
+            ctx.manifest.project,
+            ctx.manifest.model,
+        ):
+            problems.append(f"segment {index} changed the pinned provider/project/model")
+        expected = ctx.spec.concept_duration_s if ctx.spec.mode == "concept" else (index + 1) * 10
+        actual = artifact.media.duration_s if artifact.media else None
+        if actual is None or abs(actual - expected) > 0.6:
+            problems.append(f"segment {index} cumulative duration {actual}, expected {expected}s")
     return (not problems), problems

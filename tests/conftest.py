@@ -8,13 +8,14 @@ that touches a real API, and it is skipped unless `RUN_LIVE_VIDEO_TESTS=1`.
 from __future__ import annotations
 
 import json
+import os
 import struct
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from omni_homevlog.config import reset_settings_cache
+from omni_homevlog.config import Settings, reset_settings_cache
 from omni_homevlog.schemas import (
     ContinuityBible,
     CritiqueReport,
@@ -27,12 +28,36 @@ from omni_homevlog.schemas import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_settings_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def _clean_settings_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
+):
     """Isolate every test from the developer's real environment and data dir."""
+    if request.node.get_closest_marker("live") is not None:
+        # The live suite owns its opt-in and credentials. Do not erase them after
+        # its session-scoped gate has checked that they are available.
+        yield
+        return
+
+    # Deleting an environment variable alone allows pydantic-settings to load
+    # the same setting from the developer's .env. Tests that exercise dotenv
+    # explicitly can still pass Settings(_env_file=their_fixture).
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    setting_names = set(Settings.model_fields)
+    for name in list(os.environ):
+        if name.lower() in setting_names:
+            monkeypatch.delenv(name)
     monkeypatch.setenv("OMNI_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("RUN_LIVE_VIDEO_TESTS", "0")
+    monkeypatch.setenv("OMNI_FFPROBE_BIN", "__offline_container_fixture__")
+    monkeypatch.setenv("OMNI_FFMPEG_BIN", "__offline_container_fixture__")
+    import requests
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("Offline test attempted an HTTP request")
+
+    monkeypatch.setattr(requests.sessions.Session, "request", no_network)
     reset_settings_cache()
     yield
     reset_settings_cache()

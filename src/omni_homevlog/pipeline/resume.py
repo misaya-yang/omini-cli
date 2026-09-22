@@ -235,6 +235,21 @@ def approve_gate(
     manifest = ctx.store.load()
     current = manifest.state
 
+    if current is JobState.FINAL_REVIEW and stage == "final":
+        latest = manifest.last_usable_artifact()
+        history = [
+            *manifest.state_history,
+            {
+                "from": str(current),
+                "to": str(current),
+                "at": utc_now_iso(),
+                "note": "approved:final" + (f" — {note}" if note else ""),
+                "artifact_id": latest.interaction_id if latest else "",
+            },
+        ]
+        ctx.manifest = ctx.store.mutate(state_history=history)
+        return current, current
+
     if current not in HUMAN_GATE_STATES:
         raise HumanGateError(
             f"Job {manifest.job_id} is in {current}, which is not a human gate. "
@@ -242,7 +257,19 @@ def approve_gate(
             detail={"state": str(current)},
         )
 
+    gate_entry = next((e for e in reversed(manifest.state_history) if e.get("to") == str(current)), {})
+    gate_note = gate_entry.get("note", "")
+    pending_gate = gate_note.removeprefix("approval-required:") if gate_note.startswith("approval-required:") else None
+    if pending_gate is not None and stage != pending_gate:
+        raise HumanGateError(f"This job is awaiting {pending_gate!r}, not {stage!r}.")
+    if stage not in ("final", "high-res") and stage not in {f"segment-{i}" for i in range(ctx.spec.extension_count + 1)}:
+        raise HumanGateError(f"Unknown approval stage: {stage}")
     target = resume_target_after_approval(ctx)
+    if pending_gate == "high-res" or pending_gate == "segment-0":
+        target = JobState.SEED_RENDERING
+    elif pending_gate and pending_gate.startswith("segment-"):
+        index = int(pending_gate.split("-", 1)[1])
+        target = JobState(f"EXTENSION_{index}_RENDERING")
     if target is None:
         raise HumanGateError(
             f"Job {manifest.job_id} is in {current}, but no legal state to resume "
@@ -273,7 +300,7 @@ def resolve_unknown_interaction(
     bytes can be recovered, otherwise None. Never dispatches a new generation.
     """
     target_id = interaction_id or record.interaction_id
-    if target_id.startswith("unknown-") and interaction_id is None:
+    if target_id.startswith(("unknown-", "pending-")) and interaction_id is None:
         raise JobNotFoundError(
             "No interaction id was captured for this request, so it cannot be "
             "queried. A synchronous request that timed out leaves no handle. "
@@ -309,7 +336,7 @@ def resolve_unknown_interaction(
     if artifact is None:
         return None
 
-    if artifact.status == "in_progress":
+    if artifact.status in ("in_progress", "unknown") :
         logger.info(
             "Interaction is still running; not dispatching anything new",
             extra={"extra_fields": {"interaction_id": target_id}},
@@ -322,7 +349,9 @@ def resolve_unknown_interaction(
         return None
 
     # Rule 3: it completed, but we may still not have the file.
-    if artifact.gcs_uri and ctx.provider.gcs is not None:
+    if artifact.local_path and Path(artifact.local_path).is_file():
+        pass
+    elif artifact.gcs_uri and ctx.provider.gcs is not None:
         target = ctx.paths.attempt_path(
             record.segment_index, record.attempt_index, kind="recovered"
         )
@@ -345,8 +374,12 @@ def resolve_unknown_interaction(
             extra={"extra_fields": {"interaction_id": target_id}},
         )
 
-    _mark_resolved(ctx, record, status="completed")
     if not artifact.local_path:
+        return None
+    from omni_homevlog.media.ffprobe import inspect_media
+
+    artifact.media = inspect_media(artifact.local_path)
+    if not artifact.media.is_usable:
         return None
 
     # Persist the recovered render. Downloading the bytes and returning them was
@@ -357,13 +390,43 @@ def resolve_unknown_interaction(
     artifact = artifact.model_copy(
         update={
             "segment_index": record.segment_index,
+            "parent_interaction_id": record.parent_interaction_id or artifact.parent_interaction_id,
+            "requested_duration_s": int(str(record.duration or "10s").rstrip("s")),
             "task": _task_for_recovery(record),
+            "aspect_ratio": artifact.aspect_ratio or ctx.spec.aspect_ratio,
+            "resolution": artifact.resolution or record.resolution or ctx.spec.resolution,
             "status": "completed",
             "prompt_sha256": artifact.prompt_sha256 or "recovered",
         }
     )
     ctx.db.save_artifact(ctx.job_id, artifact, attempt_index=record.attempt_index)
-    ctx.manifest = ctx.store.mutate(segments=ctx.manifest.upsert_segment(artifact))
+    updated = record.model_copy(
+        update={
+            "interaction_id": target_id,
+            "status": "completed",
+            "outcome_known": True,
+            "output_uri": artifact.gcs_uri,
+            "request_completed_at": utc_now_iso(),
+        }
+    )
+    ctx.manifest = ctx.store.mutate(
+        segments=ctx.manifest.upsert_segment(artifact),
+        interactions=[
+            updated if r.interaction_id == record.interaction_id else r
+            for r in ctx.manifest.interactions
+        ],
+    )
+    ctx.db.delete_interaction(record.interaction_id)
+    ctx.db.save_interaction(updated)
+    target_state = (
+        JobState.SEED_REVIEW
+        if record.segment_index == 0
+        else extension_review_state(record.segment_index)
+    )
+    if target_state in legal_transitions(ctx.manifest.state, ctx.spec.extension_count):
+        ctx.manifest = ctx.store.transition(
+            target=target_state, note="recovered existing generation; review before continuing"
+        )
     ctx.note(
         f"recovered segment {record.segment_index} output from {target_id} and "
         f"recorded it at {artifact.local_path}"
@@ -378,6 +441,8 @@ def _task_for_recovery(record: InteractionRecord) -> Any:
     row remembers what was actually dispatched, and using that keeps the
     reconstructed chain consistent with what happened.
     """
+    if record.task in ("text_to_video", "reference_to_video", "image_to_video", "extend", "edit"):
+        return record.task
     if record.call_kind in ("seed", None) and record.segment_index == 0:
         return "reference_to_video"
     if record.call_kind == "edit":
@@ -404,34 +469,39 @@ def _mark_resolved(ctx: JobContext, record: InteractionRecord, *, status: str) -
 
 
 def fetch_missing_outputs(ctx: JobContext) -> list[str]:
-    """Rule 3 for every artifact that has a URI but no local file.
+    """Restore missing recorded outputs without creating new interactions."""
+    import asyncio
 
-    Returns the list of paths recovered.
-    """
+    from omni_homevlog.media.ffprobe import inspect_media
     recovered: list[str] = []
-    changed = False
-
-    for artifact in ctx.manifest.segments:
+    artifacts = list(ctx.manifest.segments)
+    for index, artifact in enumerate(artifacts):
         if artifact.local_path and Path(artifact.local_path).is_file():
             continue
-        if not artifact.gcs_uri or ctx.provider.gcs is None:
-            continue
-        target = ctx.paths.attempt_path(_segment_index_of(artifact), 0, kind="recovered")
+        record = next((r for r in ctx.manifest.interactions if r.interaction_id == artifact.interaction_id), None)
+        attempt = record.attempt_index if record else 0
         try:
-            ctx.provider.gcs.download_to(artifact.gcs_uri, target)
+            if artifact.gcs_uri and ctx.provider.gcs is not None:
+                target = ctx.paths.attempt_path(artifact.segment_index, attempt, kind="recovered")
+                ctx.provider.gcs.download_to(artifact.gcs_uri, target)
+                media = inspect_media(target)
+                local_path = str(target)
+            else:
+                queried = asyncio.run(ctx.provider.get_interaction(artifact.interaction_id))
+                if queried.status != "completed" or not queried.local_path:
+                    continue
+                local_path = queried.local_path
+                media = inspect_media(local_path)
+            if not media.is_usable:
+                raise ValueError("recovered output is not usable media")
+            restored = artifact.model_copy(update={"local_path": local_path, "artifact_relpath": ctx.paths.relpath(Path(local_path)), "media": media})
+            artifacts[index] = restored
+            ctx.db.save_artifact(ctx.job_id, restored, attempt_index=attempt)
+            recovered.append(local_path)
         except Exception as exc:
-            logger.warning(
-                "Could not recover artifact output",
-                extra={"extra_fields": {"uri": artifact.gcs_uri, "error": str(exc)}},
-            )
-            continue
-        artifact.local_path = str(target)
-        artifact.artifact_relpath = ctx.paths.relpath(target)
-        recovered.append(str(target))
-        changed = True
-
-    if changed:
-        ctx.manifest = ctx.store.mutate(segments=list(ctx.manifest.segments))
+            ctx.error(f"Could not recover existing output {artifact.interaction_id}: {exc}")
+    if recovered:
+        ctx.manifest = ctx.store.mutate(segments=artifacts)
     return recovered
 
 

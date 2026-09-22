@@ -35,6 +35,7 @@ from omni_homevlog import __version__
 from omni_homevlog.config import get_settings, load_thresholds
 from omni_homevlog.errors import OmniVlogError
 from omni_homevlog.observability.logging import configure_logging, get_logger
+from omni_homevlog.storage.locking import locked_command
 
 app = typer.Typer(
     name="omni-vlog",
@@ -85,6 +86,13 @@ def _root(
 
 @app.command()
 def doctor(
+    checks: Annotated[
+        str, typer.Option(help="Comma-separated seed,extend,third,edit")
+    ] = "seed,extend,third,edit",
+    max_calls: Annotated[int, typer.Option(min=1, max=8, help="Maximum paid video calls")] = 4,
+    reference: Annotated[
+        Path | None, typer.Option(help="Clean reference for reference-to-video probe")
+    ] = None,
     provider: Annotated[str, typer.Option(help="vertex or gemini_api")] = "vertex",
     project: Annotated[str | None, typer.Option(help="Google Cloud project id")] = None,
     location: Annotated[str, typer.Option(help="Vertex location")] = "global",
@@ -103,6 +111,13 @@ def doctor(
     json_out: Annotated[
         Path | None, typer.Option("--json-out", help="Write capabilities JSON")
     ] = None,
+    background: Annotated[bool, typer.Option(help="Probe acknowledged async generation and bounded GET polling")] = False,
+    seed_mode: Annotated[str, typer.Option(help="auto | text | reference | image | first-last")] = "auto",
+    last_frame: Annotated[Path | None, typer.Option(help="Ending frame for first-last mode")] = None,
+    chain_strategy: Annotated[str, typer.Option(help="previous | steps | source")] = "previous",
+    duration: Annotated[int, typer.Option(min=3, max=10, help="Seconds per seed/extension")] = 3,
+    gcs_uri: Annotated[str | None, typer.Option(help="Optional private gs:// output prefix")] = None,
+    recover_from: Annotated[Path | None, typer.Option(help="Saved capabilities JSON to recover by GET only (no new generation)")] = None,
 ) -> None:
     """Probe what the selected surface can actually do.
 
@@ -122,6 +137,31 @@ def doctor(
     from omni_homevlog.storage.local import LocalStore
 
     settings = get_settings()
+    saved_probe = None
+    if recover_from is not None:
+        if run_generation:
+            _fail("--recover-from is read-only and cannot be combined with --run-generation.")
+        from omni_homevlog.schemas import ProviderCapabilities
+        saved_probe = ProviderCapabilities.model_validate_json(recover_from.read_text())
+        provider, project, model = saved_probe.provider, saved_probe.project, saved_probe.model
+        location = saved_probe.location or "global"
+    if seed_mode not in ("auto", "text", "reference", "image", "first-last") or chain_strategy not in ("previous", "steps", "source"):
+        _fail("Invalid seed mode or chain strategy.")
+    if seed_mode in ("reference", "image", "first-last") and reference is None:
+        _fail("This seed mode requires --reference.")
+    if (seed_mode == "first-last") != (last_frame is not None):
+        _fail("--last-frame is required exactly for first-last mode.")
+    if seed_mode == "text" and reference is not None:
+        _fail("Text mode cannot include reference images.")
+    if reference or last_frame:
+        from PIL import Image
+        for path in (reference, last_frame):
+            if path is not None:
+                try:
+                    with Image.open(path) as img:
+                        img.verify()
+                except (OSError, ValueError) as exc:
+                    _fail(f"Unreadable reference image: {path.name}: {exc}")
 
     if run_generation and not settings.run_live_video_tests:
         _fail(
@@ -133,7 +173,15 @@ def doctor(
     # verify it. Without one, `provider.paths` is None, the probe skips media
     # verification entirely, and a PASS only means "the request was accepted" —
     # which is exactly the HTTP-200-is-not-an-output trap the handoff warns about.
-    probe_paths = LocalStore(settings.data_dir()).ensure().job("job-doctor-probe").ensure()
+    from omni_homevlog.storage.local import make_job_id
+
+    probe_root = LocalStore(settings.data_dir()).ensure()
+    probe_paths = (
+        probe_root.job(make_job_id()).ensure()
+        if run_generation or recover_from is not None
+        else probe_root.job("job-doctor-probe").ensure()
+    )
+    capability_db_path = probe_root.job("job-doctor-probe").ensure().db_path
 
     try:
         binding = build_provider(
@@ -143,7 +191,8 @@ def doctor(
             location=location,
             paths=probe_paths,
             settings=settings,
-            with_gcs=False,
+            with_gcs=bool(gcs_uri),
+            gcs_prefix=gcs_uri,
         )
     except OmniVlogError as exc:
         _fail(str(exc))
@@ -154,31 +203,63 @@ def doctor(
     if not ready and not run_generation:
         console.print("[yellow]Pre-flight failed; probing what can still be probed.[/yellow]")
 
+    selected = tuple(dict.fromkeys(c.strip() for c in checks.split(",") if c.strip()))
+    if (
+        not selected
+        or selected[0] != "seed"
+        or any(c not in ("seed", "extend", "third", "edit") for c in selected)
+    ):
+        _fail("Checks must begin with seed and contain only seed,extend,third,edit.")
+    if "third" in selected and ("extend" not in selected or selected.index("third") < selected.index("extend")):
+        _fail("third requires an earlier extend check.")
+    if reference is not None and not reference.is_file():
+        _fail("Reference file does not exist.")
     budget = None
     if run_generation:
         # A probe budget, deliberately tiny: 4 calls and 12 video-seconds is
         # enough for the documented matrix and small enough to be uninteresting
         # on a bill.
         budget = Budget(
-            max_total_calls=4,
-            max_video_seconds_requested=12,
+            max_total_calls=max_calls,
+            max_video_seconds_requested=max_calls * max(10, duration * 3),
             max_seed_attempts=2,
             max_edit_attempts_per_segment=0,
             max_regenerations_per_segment=0,
         )
         console.print(
             Panel(
-                "Running PAID generation probes: up to 4 calls at the cheapest "
-                "settings (3s, 360p, no people). Estimated cost is reported in the "
-                "manifest; Cloud Billing is authoritative.",
+                f"Running PAID generation probes: up to {max_calls} calls at the cheapest "
+                "settings (3s seed/appends, source-length edit, 360p). "
+                "Pricing is an estimate when configured; Cloud Billing is authoritative.",
                 title="generation probes enabled",
                 border_style="yellow",
             )
         )
 
-    report = asyncio.run(
-        build_probe_report(binding.provider, run_generation=run_generation, budget=budget)
-    )
+    if saved_probe is not None:
+        from omni_homevlog.providers.capability_probe import recover_probe_report
+        report = asyncio.run(recover_probe_report(binding.provider, saved_probe))
+    else:
+        report = asyncio.run(
+            build_probe_report(
+                binding.provider,
+                run_generation=run_generation,
+                background=background,
+                budget=budget,
+                checks=selected,
+                seed_mode=seed_mode,
+                last_frame_path=str(last_frame) if last_frame else None,
+                chain_strategy=chain_strategy,
+                duration_s=duration,
+                reference_path=str(reference) if reference else None,
+            )
+        )
+    if report.capabilities is not None:
+        from omni_homevlog.storage.database import Database
+
+        report.capabilities.location = binding.location
+        # Persist a merged copy; this report still describes only this run.
+        Database(capability_db_path).save_probe(report.capabilities.model_copy(deep=True))
 
     console.print()
     console.print(render_report(report))
@@ -311,7 +392,7 @@ def create(
     max_cost: Annotated[
         float | None, typer.Option(help="Optional estimated-cost ceiling in USD")
     ] = None,
-    no_audio: Annotated[bool, typer.Option("--no-audio", help="Disable audio")] = False,
+    no_audio: Annotated[bool, typer.Option("--no-audio", help="Export a silent derivative; keep the provider original")] = False,
     allow_template_fallback: Annotated[
         bool,
         typer.Option(
@@ -320,6 +401,7 @@ def create(
         ),
     ] = False,
     json_out: Annotated[bool, typer.Option("--json", help="Machine-readable output")] = False,
+    background: Annotated[bool, typer.Option(help="Submit asynchronously; resume retrieves the result")] = False,
 ) -> None:
     """Create and start a job."""
     from omni_homevlog.pipeline.context import JobContext
@@ -360,6 +442,7 @@ def create(
         aspect_ratio=aspect,
         resolution=resolution,
         audio_enabled=not no_audio,
+        background=background,
         provider=binding.provider_name,
         project=binding.project,
         model=binding.model,
@@ -384,12 +467,20 @@ def create(
         model=binding.model,
         settings=settings,
     )
-    if capabilities is None and not json_out:
-        console.print(
-            "[dim]No stored capability probe for this surface; the job will assume "
-            "edit and extend are available. Run `omni-vlog doctor` first to pin what "
-            "is actually supported.[/dim]"
-        )
+    if capabilities is None or capabilities.location != binding.location:
+        _fail("No matching capability evidence. Run doctor --run-generation first.")
+    from omni_homevlog.providers.request_builder import seed_input_mode
+    default_roles = ["identity_closeup", "identity_body", "environment", "outfit"]
+    input_roles = list(role or default_roles[:len(reference or [])])
+    while len(input_roles) < len(reference or []):
+        input_roles.append("environment")
+    if role and len(role) != len(reference or []):
+        _fail("Provide exactly one --role for each --reference.")
+    _, required_capability = seed_input_mode(input_roles if reference else [])
+    if not getattr(capabilities, required_capability):
+        _fail(f"Seed input mode {required_capability} has not passed a media-verified probe.")
+    if mode != "concept" and duration > 10:
+        binding.provider.chain_strategy(capabilities)  # type: ignore[attr-defined]
 
     ctx = JobContext.create(spec=spec, settings=settings, capabilities=capabilities)
 
@@ -401,7 +492,7 @@ def create(
             roles.append("environment")
         entries = [(p, roles[i], provenance) for i, p in enumerate(reference)]
 
-        sanitizer = ReferenceSanitizer(settings=settings)
+        sanitizer = ReferenceSanitizer(settings=ctx.settings)
         result = sanitizer.sanitize(references=entries, paths=ctx.paths)
         if not json_out:
             console.print(describe_result(result))
@@ -419,12 +510,13 @@ def create(
             "the plan recommends 2-4 clean photos.[/yellow]"
         )
 
-    console.print(f"job [bold]{ctx.job_id}[/bold] created")
+    if not json_out:
+        console.print(f"job [bold]{ctx.job_id}[/bold] created")
 
     report = run_job(ctx, allow_template_fallback=allow_template_fallback)
 
     if json_out:
-        console.print(
+        typer.echo(
             json.dumps(
                 {
                     "job_id": ctx.job_id,
@@ -451,6 +543,7 @@ def create(
 
 
 @app.command()
+@locked_command
 def run(
     job_id: Annotated[str, typer.Argument(help="Job id")],
     allow_template_fallback: Annotated[bool, typer.Option(hidden=True)] = False,
@@ -466,6 +559,7 @@ def run(
 
 
 @app.command()
+@locked_command
 def resume(
     job_id: Annotated[str, typer.Argument(help="Job id")],
     interaction_id: Annotated[
@@ -483,6 +577,7 @@ def resume(
         ),
     ] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show the plan only")] = False,
+    recover_only: Annotated[bool, typer.Option(help="Query/download only; no review or new generation")] = False,
 ) -> None:
     """Continue a job, resolving recovery cases first.
 
@@ -553,14 +648,25 @@ def resume(
     if recovered:
         console.print(f"re-fetched {len(recovered)} output(s) from their URIs")
 
+    remaining = [r for r in ctx.manifest.interactions if not r.outcome_known]
+    missing = [a for a in ctx.manifest.segments if not a.local_path or not Path(a.local_path).is_file()]
+    if remaining or missing:
+        _fail(f"Recovery incomplete: {len(remaining)} unresolved request(s), {len(missing)} missing output(s). No new generation dispatched.", code=3)
+
     if plan.requires_human and plan.blockers:
         console.print("[yellow]This job needs a human decision.[/yellow]")
         for blocker in plan.blockers:
             console.print(f"  - {blocker}")
         raise typer.Exit(3)
 
+    if recover_only:
+        console.print(f"recovery finished; state {ctx.store.load().state}; no new generation requested")
+        return
+
     report = run_job(ctx)
     console.print(report.summary())
+    if report.errors:
+        raise typer.Exit(2)
 
 
 @app.command()
@@ -576,7 +682,7 @@ def status(
     data = summary(ctx)
 
     if json_out:
-        console.print(json.dumps(data, indent=2, default=str))
+        typer.echo(json.dumps(data, indent=2, default=str))
         return
 
     console.print(
@@ -709,6 +815,7 @@ def review(
 
 
 @app.command()
+@locked_command
 def approve(
     job_id: Annotated[str, typer.Argument(help="Job id")],
     stage: Annotated[str, typer.Option("--stage", help="high-res | final | segment-N")] = "final",
@@ -744,6 +851,7 @@ def approve(
 
 
 @app.command()
+@locked_command
 def retry(
     job_id: Annotated[str, typer.Argument(help="Job id")],
     stage: Annotated[str, typer.Option("--stage", help="segment-N")],
@@ -830,6 +938,34 @@ def retry(
             ]
         )
 
+    if any(not r.outcome_known for r in ctx.manifest.interactions):
+        _fail("Resolve pending interactions before retry; no new generation was dispatched.")
+    if ctx.manifest.state in (JobState.COMPLETE, JobState.FAILED_FINAL, JobState.POLICY_BLOCKED):
+        _fail("This job is terminal; create a new job for further changes.")
+    if any(a.segment_index > segment_index for a in ctx.manifest.segment_artifacts()):
+        _fail(
+            "This segment already has descendants. Repair the latest cumulative video or start a new chain."
+        )
+    target_review = (
+        JobState.SEED_REVIEW
+        if segment_index == 0
+        else JobState(f"EXTENSION_{segment_index}_REVIEW")
+    )
+    from omni_homevlog.state_machine import legal_transitions
+
+    if target_review != ctx.manifest.state and target_review not in legal_transitions(
+        ctx.manifest.state, ctx.spec.extension_count
+    ):
+        ctx.manifest = ctx.store.transition(
+            target=JobState.NEEDS_HUMAN, note="operator requested repair"
+        )
+    if target_review != ctx.manifest.state:
+        ctx.manifest = ctx.store.transition(
+            target=target_review, note="operator repair; review required"
+        )
+    if force:
+        ctx.spec.max_total_calls = ctx.budget.max_total_calls
+        ctx.manifest = ctx.store.mutate(spec=ctx.spec, budget=ctx.budget.snapshot())
     console.print(f"retrying segment {segment_index} with mode={mode}")
 
     try:
@@ -892,6 +1028,7 @@ def _resolve_edit_prompt(ctx: Any, segment_index: int, supplied: str | None) -> 
 
 
 @app.command()
+@locked_command
 def export(
     job_id: Annotated[str, typer.Argument(help="Job id")],
     output: Annotated[Path, typer.Option("--output", "-o", help="Destination path")],
@@ -901,13 +1038,8 @@ def export(
 ) -> None:
     """Copy the deliverable to a path of your choosing."""
     from omni_homevlog.pipeline.finalize import export as do_export
-    from omni_homevlog.pipeline.finalize import finalize
 
     ctx = _load_context(job_id)
-    if not ctx.manifest.final_path:
-        console.print("not finalized yet; finalizing first")
-        finalize(ctx)
-        ctx.reload()
 
     path = do_export(ctx, output=output, allow_derived=allow_derived)
     console.print(f"exported to [bold]{path}[/bold]")
@@ -922,6 +1054,7 @@ def export(
 
 
 @app.command("high-res")
+@locked_command
 def high_res(
     job_id: Annotated[str, typer.Argument(help="Source job id")],
     resolution: Annotated[str, typer.Option("--resolution", help="1080p or 4k")] = "1080p",
@@ -982,7 +1115,11 @@ def high_res(
     if not binding_ok:
         _fail(f"Provider not ready: {message}")
 
-    new_ctx = JobContext.create(spec=new_spec, settings=source.settings)
+    new_ctx = JobContext.create(
+        spec=new_spec, settings=source.settings, capabilities=source.capabilities
+    )
+    # The explicit confirmation above is this new job's high-resolution approval.
+    new_ctx.manifest = new_ctx.store.mutate(state_history=[*new_ctx.manifest.state_history, {"from": "CREATED", "to": "CREATED", "at": _now(), "note": "approved:high-res"}])
 
     # Carry the approved references over, so the new chain draws on the same
     # identity material rather than starting from nothing.
@@ -990,6 +1127,13 @@ def high_res(
     for asset in source.manifest.references:
         cloned = asset.model_copy(deep=True)
         cloned.id = f"{asset.id}_hires"
+        original_reference = Path(asset.path_or_uri)
+        if original_reference.is_file():
+            import shutil
+            copied_reference = new_ctx.paths.references_dir / original_reference.name
+            shutil.copy2(original_reference, copied_reference)
+            cloned.path_or_uri = str(copied_reference)
+            cloned.staged_uri = None
         carried.append(cloned)
     if carried:
         new_ctx.manifest = new_ctx.store.mutate(references=carried)
@@ -1017,6 +1161,7 @@ def high_res(
 
 
 @app.command()
+@locked_command
 def sync(
     job_id: Annotated[str, typer.Argument(help="Job id")],
 ) -> None:
@@ -1048,6 +1193,7 @@ def sync(
 
 
 @app.command()
+@locked_command
 def delete(
     job_id: Annotated[str, typer.Argument(help="Job id")],
     yes: Annotated[bool, typer.Option("--yes", help="Skip the confirmation prompt")] = False,
@@ -1258,3 +1404,23 @@ def main() -> None:
 
 
 _ = Decimal  # kept importable for scripts that build specs programmatically
+
+
+@app.command()
+def studio(
+    port: int = typer.Option(8765, min=1024, max=65535, help="Local workbench port."),
+    open_browser: bool = typer.Option(True, '--open/--no-open', help="Open the local workbench."),
+) -> None:
+    """启动本地网页工作台：选图、生成、预览、修改与下载。"""
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from omni_homevlog.studio.app import create_app
+
+    url = f'http://127.0.0.1:{port}'
+    console.print(f'Omni Studio: {url}')
+    if open_browser:
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    uvicorn.run(create_app(), host='127.0.0.1', port=port)

@@ -115,7 +115,8 @@ def test_the_asset_is_updated_so_a_repair_does_not_re_upload(tmp_path) -> None:
     asset = local_asset(tmp_path)
 
     provider._resolve_reference_inputs(request_for([asset]))
-    assert asset.path_or_uri.startswith("gs://")
+    assert asset.staged_uri.startswith("gs://")
+    assert Path(asset.path_or_uri).is_file()
 
     provider._resolve_reference_inputs(request_for([asset]))
     assert len(gcs.uploads) == 1, "the reference was uploaded twice"

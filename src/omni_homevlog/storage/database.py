@@ -394,6 +394,51 @@ class Database:
     # ── probes ─────────────────────────────────────────────────────────────
 
     def save_probe(self, caps: ProviderCapabilities) -> None:
+        previous = self.latest_probe(caps.provider, caps.project, caps.model)
+        for snapshot in (caps, previous):
+            if snapshot is not None:
+                for current, legacy in (("T2V", "T2V 3s 360p"), ("I2V", "I2V 3s 360p")):
+                    if current not in snapshot.evidence and legacy in snapshot.evidence:
+                        snapshot.evidence[current] = snapshot.evidence[legacy]
+        if previous and previous.location == caps.location and caps.evidence:
+            mapping = {
+                "t2v": "T2V",
+                "i2v": "I2V",
+                "reference_to_video": "Reference-to-video",
+                "edit": "Edit",
+                "extend": "Extend",
+                "stateful_previous_interaction_id": "previous_interaction_id",
+                "stateful_steps_replay": "steps replay",
+                "first_last_frame": "First + last frame",
+                "gcs_delivery": "GCS URI delivery",
+                "uri_delivery": "GCS URI delivery",
+                "native_audio": "Native audio",
+                "async_polling": "Async polling",
+                "remote_retrieval": "Remote recovery",
+            }
+            for field, name in mapping.items():
+                row = caps.evidence.get(name, {})
+                if field == "native_audio" and any(
+                    (r.get("evidence", {}).get("media") or {}).get("has_audio")
+                    for r in caps.evidence.values()
+                ):
+                    continue
+                if row.get("status") not in ("PASS", "FAIL"):
+                    setattr(caps, field, getattr(previous, field))
+                    if name in previous.evidence:
+                        caps.evidence[name] = previous.evidence[name]
+            if not any(
+                r.get("status") in ("PASS", "FAIL")
+                for n, r in caps.evidence.items()
+                if n == "continuation grows the film"
+            ):
+                caps.max_total_chain_s = previous.max_total_chain_s
+                caps.measured_chain_s = previous.measured_chain_s
+            if not caps.measured_generation_s:
+                caps.measured_generation_s = previous.measured_generation_s
+            for name, evidence in previous.evidence.items():
+                if name not in caps.evidence:
+                    caps.evidence[name] = evidence
         with self._connect() as conn:
             conn.execute(
                 """

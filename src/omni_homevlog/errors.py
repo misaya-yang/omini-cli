@@ -162,6 +162,12 @@ class RequestTimeoutUnknownOutcome(ProviderError):
     )
 
 
+class InteractionPending(RequestTimeoutUnknownOutcome):
+    """An acknowledged asynchronous render; resume queries its durable ID."""
+
+    code = "interaction_pending"
+
+
 class InteractionFailedError(ProviderError):
     """The provider accepted the request and then reported failure."""
 

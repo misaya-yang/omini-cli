@@ -244,7 +244,7 @@ def _probe_prompt_for(task: str) -> str:
             "colours, and lighting. No people, no text."
         )
     if task == "edit":
-        return "Remove any small object from the surface. Change nothing else."
+        return "Change only the tabletop colour to muted blue. Preserve the entire video duration, camera movement, lighting and audio. Change nothing else."
     return "Continue the shot naturally for a few more seconds. Change nothing else."
 
 
@@ -281,6 +281,13 @@ async def probe_generation(
     label: str | None = None,
     budget: Any | None = None,
     segment_index: int = -1,
+    reference_path: str | None = None,
+    background: bool = False,
+    poll_attempts: int = 6,
+    poll_interval_s: float = 2.0,
+    last_frame_path: str | None = None,
+    prior_steps: list[dict[str, Any]] | None = None,
+    source_video: dict[str, str] | None = None,
 ) -> tuple[ProbeResult, Any | None]:
     """Run one paid generation probe. Returns the result and any parsed envelope.
 
@@ -339,13 +346,14 @@ async def probe_generation(
 
     request = RenderRequest(
         task=task,  # type: ignore[arg-type]
+        background=background,
         # A continuation asks to continue; everything else uses its task prompt.
         # Sending the seed prompt here made the model choose between "generate a
         # shot of a table" and "continue the previous video", and it chose
         # differently on different runs.
         prompt=(
             _continuation_prompt()
-            if previous_interaction_id or task == "extend"
+            if (previous_interaction_id or task == "extend") and task != "edit"
             else _probe_prompt_for(task)
         ),
         segment_index=segment_index,
@@ -355,14 +363,48 @@ async def probe_generation(
         duration_s=duration_s,
         parent_interaction_id=previous_interaction_id,
         input_video_uri=include_video_input,
+        input_video=source_video,
+        prior_steps=prior_steps,
         labels={"probe": "1"},
     )
     payload = provider.build_payload(request)
+    for image_path in (reference_path, last_frame_path):
+        if image_path:
+            from pathlib import Path
+
+            from omni_homevlog.media.inspect_image import mime_for_path
+            ref = Path(image_path)
+            payload["input"].append(provider.encode_inline_reference(ref, mime_for_path(ref) or "image/png"))
+    if provider.paths is not None:
+        from omni_homevlog.storage.local import atomic_write_json
+
+        atomic_write_json(
+            provider.paths.debug_dir / f"probe_dispatch_{segment_index}.json",
+            {
+                "label": name,
+                "status": "dispatched",
+                "previous_interaction_id": previous_interaction_id,
+                "duration_s": duration_s,
+                "budget": budget.snapshot() if budget else None,
+            },
+        )
 
     import asyncio
 
+    created_id = None
+    poll_count = 0
+    initial_status = None
     try:
         result = await asyncio.to_thread(provider.transport.create_interaction, payload)
+        created_id = result.envelope.interaction_id
+        initial_status = result.envelope.status
+        if provider.paths is not None:
+            atomic_write_json(provider.paths.debug_dir / f"probe_dispatch_{segment_index}.json", {"label": name, "status": initial_status, "interaction_id": created_id, "previous_interaction_id": previous_interaction_id, "duration_s": duration_s, "budget": budget.snapshot() if budget else None})
+        while result.envelope.is_pending and poll_count < poll_attempts:
+            if poll_count:
+                await asyncio.sleep(poll_interval_s)
+            poll_count += 1
+            result = await asyncio.to_thread(provider.transport.get_interaction, created_id)
     except OmniVlogError as exc:
         status, detail = _classify_probe_failure(exc)
         return (
@@ -370,7 +412,7 @@ async def probe_generation(
                 name=name,
                 status=status,
                 detail=detail,
-                evidence={"error_code": getattr(exc, "code", None)},
+                evidence={"error_code": getattr(exc, "code", None), "interaction_id": created_id, "poll_count": poll_count},
                 latency_s=time.monotonic() - started,
             ),
             None,
@@ -390,6 +432,11 @@ async def probe_generation(
     latency = time.monotonic() - started
     evidence: dict[str, Any] = {
         "interaction_id": envelope.interaction_id,
+        "background": background,
+        "task": task,
+        "requested_duration_s": duration_s,
+        "initial_status": initial_status,
+        "poll_count": poll_count,
         "status": envelope.status,
         "http_status": result.http_status,
         "parsed_from": envelope.parsed_from,
@@ -400,7 +447,8 @@ async def probe_generation(
     }
 
     if envelope.status.lower() != "completed":
-        status, detail = ProbeStatus.FAIL, f"Interaction status was '{envelope.status}'"
+        status = ProbeStatus.BLOCKED if envelope.is_pending else ProbeStatus.FAIL
+        detail = f"Interaction status was '{envelope.status}'; existing ID: {envelope.interaction_id}. No new generation will be issued."
         if envelope.errors:
             detail += f": {envelope.errors[0].get('message')}"
         return ProbeResult(
@@ -425,18 +473,24 @@ async def probe_generation(
         try:
             video = envelope.video
             assert video is not None
-            target = provider.paths.debug_dir / f"probe_{task}_{int(time.time())}.mp4"
+            target = provider.paths.debug_dir / f"probe_{segment_index}_{task}_{time.time_ns()}.mp4"
             if video.is_inline:
                 from omni_homevlog.storage.local import atomic_write_bytes
 
                 atomic_write_bytes(target, video.decode())
-            elif video.uri and provider.gcs is not None:
+            elif video.uri and video.uri.startswith("gs://") and provider.gcs is not None:
                 provider.gcs.download_to(video.uri, target)
+            elif video.uri and video.uri.startswith("https://"):
+                provider._download_https(video.uri, target)
             else:
                 target = None
             if target is not None and target.is_file():
                 info = inspect_media(target)
                 evidence["media"] = info.model_dump()
+                evidence["local_path"] = str(target)
+                import hashlib
+
+                evidence["sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
                 media_detail = (
                     f"{info.width}x{info.height}, {info.duration_s}s, "
                     f"{info.video_codec}, audio={info.has_audio} (via {info.probed_with})"
@@ -444,10 +498,12 @@ async def probe_generation(
         except Exception as exc:
             media_detail = f"media verification failed: {type(exc).__name__}: {exc}"
 
+    media = evidence.get("media") or {}
+    verified = bool(media.get("duration_s") and not media.get("error") and media.get("video_codec"))
     return (
         ProbeResult(
             name=name,
-            status=ProbeStatus.PASS,
+            status=ProbeStatus.PASS if verified else ProbeStatus.FAIL,
             detail=f"completed in {latency:.1f}s; {media_detail}",
             evidence=evidence,
             latency_s=latency,
@@ -483,6 +539,13 @@ async def build_probe_report(
     *,
     run_generation: bool = False,
     budget: Any | None = None,
+    checks: tuple[str, ...] = ("seed", "extend", "third", "edit"),
+    reference_path: str | None = None,
+    background: bool = False,
+    seed_mode: str = "auto",
+    last_frame_path: str | None = None,
+    chain_strategy: str = "previous",
+    duration_s: int = 3,
 ) -> ProbeReport:
     """Run the probe matrix and return the full report."""
     import sys
@@ -510,8 +573,8 @@ async def build_probe_report(
 
     if not run_generation:
         for name in (
-            "T2V 3s 360p",
-            "I2V 3s 360p",
+            "T2V",
+            "I2V",
             "Reference-to-video",
             "Edit",
             "Extend",
@@ -540,81 +603,101 @@ async def build_probe_report(
         report.capabilities = _capabilities_from(report)
         return report
 
-    # ── paid probes, cheapest first ───────────────────────────────────────
-    seed_result, seed_envelope = await probe_generation(
-        provider, task="text_to_video", label="T2V 3s 360p", budget=budget, segment_index=0
+    mode = ("reference" if reference_path else "text") if seed_mode == "auto" else seed_mode
+    task, seed_label = {"text": ("text_to_video", "T2V"), "reference": ("reference_to_video", "Reference-to-video"), "image": ("image_to_video", "I2V"), "first-last": ("image_to_video", "First + last frame")}[mode]
+    seed_result, envelope = await probe_generation(
+        provider,
+        task=task,
+        duration_s=duration_s,
+        label=seed_label,
+        budget=budget,
+        segment_index=0,
+        reference_path=reference_path,
+        last_frame_path=last_frame_path,
+        background=background,
     )
     report.add(seed_result)
-
-    if seed_envelope is not None and seed_result.status is ProbeStatus.PASS:
-        # `previous_interaction_id`: the priority-1 chaining mechanism (§8.2/§8.3).
-        follow_result, follow_envelope = await probe_generation(
-            provider,
-            task="text_to_video",
-            label="previous_interaction_id",
-            previous_interaction_id=seed_envelope.interaction_id,
-            budget=budget,
-            segment_index=1,
-        )
-        report.add(follow_result)
-
-        extend_uri = seed_envelope.video.uri if seed_envelope.video else None
-        if extend_uri:
-            extend_result, _ = await probe_generation(
+    current_result = seed_result
+    if seed_result.status is ProbeStatus.PASS and envelope is not None:
+        for index, check in enumerate((c for c in checks if c != "seed"), 1):
+            chain_label = {"previous": "previous_interaction_id", "steps": "steps replay", "source": "Extend"}[chain_strategy]
+            label = "Edit" if check == "edit" else ("third link" if check == "third" else chain_label)
+            source_video = None
+            prior_steps = None
+            if chain_strategy == "steps":
+                prior_steps = envelope.steps
+            elif chain_strategy == "source":
+                video = envelope.require_video()
+                source_video = {"type": "video", "mime_type": video.mime_type or "video/mp4"}
+                if video.uri:
+                    source_video["uri"] = video.uri
+                elif video.data_b64:
+                    source_video["data"] = video.data_b64
+            result, next_envelope = await probe_generation(
                 provider,
-                task="extend",
-                label="Extend",
-                include_video_input=extend_uri,
+                task="edit" if check == "edit" else "extend",
+                duration_s=round(current_result.evidence["media"]["duration_s"])
+                if check == "edit"
+                else duration_s,
+                label=label,
+                background=background,
+                previous_interaction_id=envelope.interaction_id,
                 budget=budget,
-                segment_index=2,
+                segment_index=index,
+                prior_steps=prior_steps,
+                source_video=source_video,
             )
-            report.add(extend_result)
-
-        if follow_envelope is not None:
-            _assert_continuation_grew(report, seed_result, follow_result)
-            report.add(
-                ProbeResult(
-                    name="steps replay",
-                    status=ProbeStatus.UNKNOWN,
-                    detail=(
-                        "Not probed automatically. Replaying prior `interaction.steps` "
-                        "requires a payload this probe does not synthesise; verify it "
-                        "manually before relying on strategy B."
-                    ),
-                )
-            )
-    else:
-        for name in (
-            "previous_interaction_id",
-            "Extend",
-            "steps replay",
-            "Max tested chain",
-        ):
+            report.add(result)
+            if result.status is not ProbeStatus.PASS or next_envelope is None:
+                break
+            if check in ("extend", "third"):
+                _assert_continuation_grew(report, current_result, result, duration_s=duration_s)
+                growth = report.results[-1]
+                if check == "third":
+                    growth.name = "third link grows the film"
+                elif chain_strategy != "previous":
+                    growth.name = f"{chain_strategy} continuation grows the film"
+                if growth.status is not ProbeStatus.PASS:
+                    break
+            elif check == "edit":
+                before = (current_result.evidence.get("media") or {}).get("duration_s")
+                after = (result.evidence.get("media") or {}).get("duration_s")
+                if before is None or after is None or abs(before - after) > 0.6:
+                    result.status = ProbeStatus.FAIL
+                    result.detail = "Edit changed cumulative duration; review manually."
+                    break
+            current_result, envelope = result, next_envelope
+    successes = [r for r in report.results if r.status is ProbeStatus.PASS and r.evidence.get("media")]
+    if any(r.evidence.get("poll_count", 0) > 0 for r in successes):
+        report.add(ProbeResult(name="Async polling", status=ProbeStatus.PASS, detail="Acknowledged pending interaction retrieved by GET; exactly one POST per probe."))
+        report.add(ProbeResult(name="Remote recovery", status=ProbeStatus.PASS, detail="Output retrieved through the provider GET path and media verified."))
+    if any(r.evidence["media"].get("has_audio") for r in successes):
+        report.add(ProbeResult(name="Native audio", status=ProbeStatus.PASS, detail="Audio track detected in downloaded output."))
+    if any(str(r.evidence.get("video_uri", "")).startswith("gs://") for r in successes):
+        report.add(ProbeResult(name="GCS URI delivery", status=ProbeStatus.PASS, detail="Generated output delivered through GCS and downloaded media verified."))
+    for name in (
+        "I2V",
+        "Reference-to-video",
+        "First + last frame",
+        "Edit",
+        "Extend",
+        "steps replay",
+        "GCS URI delivery",
+        "Native audio",
+    ):
+        if report.get(name) is None:
             report.add(
                 ProbeResult(
                     name=name,
                     status=ProbeStatus.SKIPPED,
-                    detail="Seed probe did not succeed, so dependent probes were not run.",
+                    detail="Not selected or no suitable input; no capability inferred.",
                 )
             )
-
-    for name in ("I2V 3s 360p", "Reference-to-video", "Edit", "GCS URI delivery"):
-        report.add(
-            ProbeResult(
-                name=name,
-                status=ProbeStatus.SKIPPED,
-                detail=(
-                    "Not probed: needs approved reference/input media. Use "
-                    "`scripts/smoke_render.py` with real assets."
-                ),
-            )
-        )
-
     report.capabilities = _capabilities_from(report)
     return report
 
 
-def _assert_continuation_grew(report: ProbeReport, seed: ProbeResult, follow: ProbeResult) -> None:
+def _assert_continuation_grew(report: ProbeReport, seed: ProbeResult, follow: ProbeResult, *, duration_s: int = 3) -> None:
     """Confirm a continuation produced a *longer* film, not just a 200.
 
     A request that is accepted and returns a fresh clip of the same length is not
@@ -641,7 +724,7 @@ def _assert_continuation_grew(report: ProbeReport, seed: ProbeResult, follow: Pr
         )
         return
 
-    grew = follow_seconds > seed_seconds + 0.5
+    grew = abs(follow_seconds - seed_seconds - duration_s) <= 0.6
     report.add(
         ProbeResult(
             name="continuation grows the film",
@@ -669,14 +752,18 @@ def _capabilities_from(report: ProbeReport) -> ProviderCapabilities:
         model=report.model,
         probed_at=utc_now_iso(),
     )
-    caps.t2v = report.passed("T2V 3s 360p")
-    caps.i2v = report.passed("I2V 3s 360p")
+    caps.t2v = report.passed("T2V") or report.passed("T2V 3s 360p")
+    caps.i2v = report.passed("I2V") or report.passed("I2V 3s 360p")
     caps.reference_to_video = report.passed("Reference-to-video")
     caps.first_last_frame = report.passed("First + last frame")
     caps.edit = report.passed("Edit")
-    caps.extend = report.passed("Extend")
-    caps.stateful_previous_interaction_id = report.passed("previous_interaction_id")
-    caps.stateful_steps_replay = report.passed("steps replay")
+    caps.async_polling = report.passed("Async polling")
+    caps.remote_retrieval = report.passed("Remote recovery")
+    caps.extend = report.passed("Extend") and report.passed("source continuation grows the film")
+    caps.stateful_previous_interaction_id = report.passed(
+        "previous_interaction_id"
+    ) and report.passed("continuation grows the film")
+    caps.stateful_steps_replay = report.passed("steps replay") and report.passed("steps continuation grows the film")
     caps.gcs_delivery = report.passed("GCS URI delivery")
     caps.uri_delivery = caps.gcs_delivery
 
@@ -685,8 +772,7 @@ def _capabilities_from(report: ProbeReport) -> ProviderCapabilities:
         # ceiling. Record what was measured, not what is documented.
         caps.max_generation_s = 10
         caps.notes.append(
-            "max_generation_s recorded as the documented 10s ceiling; the probe "
-            "measured only 3s. Narrow it if a longer request fails."
+            "max_generation_s is the documented ceiling; measured_generation_s records this probe's actual output duration."
         )
 
     # The longest chain a probe actually demonstrated, in seconds.
@@ -695,15 +781,29 @@ def _capabilities_from(report: ProbeReport) -> ProviderCapabilities:
     # whose branches are identical, so a chain that demonstrably reached 6s still
     # reported 3s. The value matters: it is what `can_chain()` checks before the
     # pipeline commits to a 30-second run.
-    seed_seconds = 3
-    chain = 0
-    if caps.t2v:
-        chain = seed_seconds
-    if report.passed("previous_interaction_id") or report.passed("Extend"):
-        # A continuation was accepted, and a continuation returns the whole film,
-        # so the chain is now twice the seed. Measured live: 3.008s -> 6.016s.
-        chain = seed_seconds * 2
-    caps.max_total_chain_s = chain or None
+    generation_rows = [
+        r for r in report.results if r.status is ProbeStatus.PASS and r.evidence.get("media")
+    ]
+    caps.measured_generation_s = (
+        float(generation_rows[0].evidence["media"]["duration_s"]) if generation_rows else None
+    )
+    chain_values = [
+        float(r.evidence["continuation_s"])
+        for r in report.results
+        if r.status is ProbeStatus.PASS and r.name.endswith("grows the film")
+    ]
+    caps.measured_chain_s = max(chain_values) if chain_values else caps.measured_generation_s
+    caps.max_total_chain_s = round(caps.measured_chain_s) if caps.measured_chain_s else None
+    caps.native_audio = any(r.evidence["media"].get("has_audio") for r in generation_rows)
+    caps.evidence = {
+        r.name: {
+            "status": r.status.value,
+            "detail": r.detail,
+            "at": report.started_at,
+            "evidence": r.evidence,
+        }
+        for r in report.results
+    }
 
     for row in report.results:
         if row.status is ProbeStatus.BLOCKED:
@@ -804,7 +904,9 @@ def render_capability_markdown(report: ProbeReport, *, redact_project: bool = Tr
     if caps is not None:
         import json
 
-        payload = json.dumps(caps.model_dump(mode="json"), indent=2)
+        from omni_homevlog.observability.redaction import redact
+
+        payload = json.dumps(redact(caps.model_dump(mode="json")), indent=2)
         if redact_project and raw_project:
             payload = payload.replace(raw_project, project)
         lines.append(payload)
@@ -846,3 +948,48 @@ def render_capability_markdown(report: ProbeReport, *, redact_project: bool = Tr
         )
 
     return "\n".join(lines) + "\n"
+
+
+async def recover_probe_report(provider: Any, saved: ProviderCapabilities) -> ProbeReport:
+    """Resume a saved probe using GET only; never repeat an expensive seed."""
+    import hashlib
+    from pathlib import Path
+
+    if (provider.provider_name, provider.project, provider.model) != (saved.provider, saved.project, saved.model):
+        raise ValueError("Probe recovery must use the original provider/project/model")
+    report = ProbeReport(provider=saved.provider, project=saved.project, model=saved.model, started_at=utc_now_iso())
+    recovered_async = False
+    for name, original in saved.evidence.items():
+        evidence = dict(original.get("evidence") or {})
+        row = ProbeResult(name=name, status=ProbeStatus(original.get("status", "UNKNOWN")), detail=str(original.get("detail", "")), evidence=evidence)
+        if row.status is ProbeStatus.BLOCKED and evidence.get("interaction_id"):
+            try:
+                artifact = await provider.get_interaction(evidence["interaction_id"])
+                evidence["recovery_gets"] = evidence.get("recovery_gets", 0) + 1
+                evidence["new_video_calls"] = 0
+                if artifact.status == "completed" and artifact.local_path and artifact.media and artifact.media.is_usable:
+                    if artifact.model != saved.model:
+                        raise ValueError("Recovered output belongs to a different model")
+                    expected = evidence.get("requested_duration_s")
+                    if expected and evidence.get("task") != "extend" and abs(artifact.media.duration_s - expected) > 0.6:
+                        raise ValueError("Recovered duration does not match the original request")
+                    evidence.update(media=artifact.media.model_dump(), local_path=artifact.local_path, sha256=hashlib.sha256(Path(artifact.local_path).read_bytes()).hexdigest(), status="completed", usage=artifact.usage)
+                    row.status = ProbeStatus.PASS
+                    row.detail = "Recovered and verified the original output by GET; no new video generation."
+                    recovered_async = recovered_async or bool(evidence.get("background"))
+                elif artifact.status in ("in_progress", "unknown"):
+                    row.detail = f"Existing interaction remains {artifact.status}; no new video generation."
+                else:
+                    row.status = ProbeStatus.FAIL
+                    row.detail = f"Existing interaction ended as {artifact.status}: {artifact.error_message or 'no usable output'}"
+            except Exception as exc:
+                row.status = ProbeStatus.BLOCKED
+                row.detail = f"Read-only recovery failed: {exc}. No new generation."
+        report.add(row)
+    if recovered_async:
+        for name in ("Async polling", "Remote recovery"):
+            report.results = [r for r in report.results if r.name != name]
+            report.add(ProbeResult(name=name, status=ProbeStatus.PASS, detail="Previously acknowledged background request recovered and media verified."))
+    report.capabilities = _capabilities_from(report)
+    report.capabilities.location = saved.location
+    return report

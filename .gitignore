@@ -93,3 +93,5 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+# Frontend dependencies
+ui/node_modules/

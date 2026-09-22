@@ -18,6 +18,9 @@ dependencies = [
     "requests>=2.32",
     "google-auth>=2.35",
     "Pillow>=10.4",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.18",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +29,7 @@ dependencies = [
 sdk = ["google-genai>=2.24"]
 gcs = ["google-cloud-storage>=2.18"]
 dev = [
+    "httpx>=0.28",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",

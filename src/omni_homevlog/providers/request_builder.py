@@ -287,6 +287,21 @@ def build_create_payload(
     return payload
 
 
+def seed_input_mode(roles: list[str]) -> tuple[VideoTask, str]:
+    """Select the image-generation contract without silently dropping roles."""
+    if not roles:
+        return "text_to_video", "t2v"
+    if len(roles) > 5:
+        raise InvalidRequestError("At most five reference images are supported.")
+    if "motion_reference" in roles:
+        raise InvalidRequestError("The image CLI does not accept motion-reference videos. Use a native source-video probe for video continuation.")
+    if any(r in FRAME_ROLES for r in roles):
+        if roles.count("first_frame") != 1 or roles.count("last_frame") > 1 or any(r not in FRAME_ROLES for r in roles):
+            raise InvalidRequestError("Frame input needs exactly one first_frame and optionally one last_frame; do not mix it with identity/reference roles.")
+        return "image_to_video", "first_last_frame" if "last_frame" in roles else "i2v"
+    return "reference_to_video", "reference_to_video"
+
+
 def order_references(references: list[ReferenceAsset]) -> list[ReferenceAsset]:
     """Stable reference ordering.
 
@@ -294,7 +309,7 @@ def order_references(references: list[ReferenceAsset]) -> list[ReferenceAsset]:
     refers to images positionally — so the order has to be deterministic across
     every segment of a job.
     """
-    rank = {role: i for i, role in enumerate(REFERENCE_ROLE_ORDER)}
+    rank = {role: i for i, role in enumerate((*REFERENCE_ROLE_ORDER, *FRAME_ROLES))}
     return sorted(
         references,
         key=lambda a: (rank.get(a.role, len(REFERENCE_ROLE_ORDER)), a.sha256, a.id),

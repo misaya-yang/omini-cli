@@ -310,3 +310,4 @@ to look at:
   previous render as a video input. That is recorded per artifact precisely so a reader
   can tell it apart from a server-side-state chain.
 - For failure modes and what to do about them, read `docs/RECOVERY.md`.
+See [the no-person acceptance example](ACCEPTANCE.md) for the measured short native chain and local artifact locations.

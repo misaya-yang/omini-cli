@@ -85,6 +85,15 @@ def estimate_from_usage(
     )
 
 
+def has_video_pricing(model: str, pricing: dict[str, Any] | None = None) -> bool:
+    data = pricing if pricing is not None else load_pricing()
+    cfg = (data.get("models") or {}).get(model) or {}
+    return (
+        Decimal(str(cfg.get("video_tokens_per_second", 0) or 0)) > 0
+        and Decimal(str(cfg.get("video_output_usd_per_1k_tokens", 0) or 0)) > 0
+    )
+
+
 def pricing_staleness_note(pricing: dict[str, Any] | None = None) -> str:
     data = pricing if pricing is not None else load_pricing()
     updated = data.get("updated_at", "unknown")

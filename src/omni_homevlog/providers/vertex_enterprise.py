@@ -58,6 +58,7 @@ class VertexEnterpriseProvider(BaseVideoProvider):
             location=location,
             session=session,
             timeout_s=kwargs.pop("timeout_s", 600.0),
+            query_timeout_s=kwargs.pop("query_timeout_s", 60.0),
             keep_raw=kwargs.pop("keep_raw", True),
         )
         super().__init__(transport=transport, model=resolved_model, project=project, **kwargs)
@@ -79,11 +80,9 @@ class VertexEnterpriseProvider(BaseVideoProvider):
         video, which is materially different provenance from strategy A.
         """
         if caps is None:
-            # Not probed. Still A: it is the verified mechanism here, and it is
-            # also the cheapest, so assuming it costs nothing if it turns out to
-            # be unavailable — the request fails loudly rather than silently
-            # producing an unlinked clip.
-            return "A"
+            raise CapabilityMissingError(
+                "Native continuation has not been probed for this surface."
+            )
         if caps.stateful_previous_interaction_id:
             return "A"
         if caps.stateful_steps_replay:
@@ -109,15 +108,8 @@ class VertexEnterpriseProvider(BaseVideoProvider):
         return self._chain_strategy_name() == "C"
 
     def _chain_strategy_name(self) -> str:
-        """The strategy in force for a provider that may not have been probed.
-
-        `chain_strategy(None)` is the unprobed answer, and this surface answers A:
-        the mechanism verified live, and the one that needs nothing but an
-        interaction id. Passing the real capability record around would mean every
-        caller had to thread one through, for a decision that only differs when a
-        probe has explicitly found A unavailable.
-        """
-        return self.chain_strategy(None)
+        """Use the exact capability snapshot bound to this job."""
+        return self.chain_strategy(self.capabilities)
 
     def build_payload(
         self,
@@ -156,7 +148,7 @@ class VertexEnterpriseProvider(BaseVideoProvider):
         argument rather than a rewrite. `tests/unit/test_vertex_continuation.py`
         records the measurement that justifies the default.
         """
-        is_continuation = bool(request.parent_interaction_id)
+        is_continuation = bool(request.parent_interaction_id) and not (request.input_video_uri or request.input_video)
         drop_for_continuation = is_continuation and apply_continuation_rule
 
         if drop_for_continuation:

@@ -21,6 +21,7 @@ import random
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from omni_homevlog.errors import (
@@ -82,6 +83,8 @@ class TextModelClient:
         session: Any | None = None,
         timeout_s: float = 180.0,
         max_retries: int = MAX_RETRIES,
+        ledger_path: Path | None = None,
+        max_calls: int = 24,
     ) -> None:
         self.model = model
         self.provider = provider
@@ -91,6 +94,8 @@ class TextModelClient:
         self._session = session
         self.timeout_s = timeout_s
         self.max_retries = max_retries
+        self.ledger_path = ledger_path
+        self.max_calls = max_calls
 
         if provider == "vertex" and not project:
             raise ConfigError("TextModelClient needs a project when provider='vertex'.")
@@ -202,6 +207,7 @@ class TextModelClient:
                 delay = min(20.0, 1.0 * (2 ** (attempt - 1))) + random.uniform(0, 0.5)
                 time.sleep(delay)
             started = time.monotonic()
+            entry = self._reserve_call()
             try:
                 response = self.session.post(
                     url, headers=self.headers(), json=payload, timeout=self.timeout_s
@@ -237,10 +243,38 @@ class TextModelClient:
                     continue
                 raise error
 
-            return self._parse_response(text, latency)
+            parsed = self._parse_response(text, latency)
+            if self.ledger_path is not None:
+                from omni_homevlog.storage.local import atomic_write_json, read_json
+
+                rows = read_json(self.ledger_path)
+                rows[entry].update(status="completed", usage=parsed.usage, latency_s=latency)
+                atomic_write_json(self.ledger_path, rows)
+            return parsed
 
         assert last_error is not None
         raise last_error
+
+    def _reserve_call(self) -> int:
+        if self.ledger_path is None:
+            return 0
+        from omni_homevlog.errors import BudgetExhaustedError
+        from omni_homevlog.schemas import utc_now_iso
+        from omni_homevlog.storage.local import atomic_write_json, read_json
+
+        rows = read_json(self.ledger_path) if self.ledger_path.is_file() else []
+        if len(rows) >= self.max_calls:
+            raise BudgetExhaustedError(f"Text/vision call ceiling reached ({self.max_calls}).")
+        rows.append(
+            {
+                "model": self.model,
+                "at": utc_now_iso(),
+                "status": "dispatched",
+                "estimated_cost_usd": None,
+            }
+        )
+        atomic_write_json(self.ledger_path, rows)
+        return len(rows) - 1
 
     def _parse_response(self, text: str, latency: float) -> LLMResponse:
         try:
@@ -352,10 +386,14 @@ def build_client(
             project=project or settings.resolve_project(None),
             location=location or settings.google_cloud_location,
             timeout_s=min(300.0, settings.omni_request_timeout_s),
+            ledger_path=settings.omni_llm_ledger,
+            max_calls=settings.omni_max_llm_calls,
         )
     return TextModelClient(
         model=model,
         provider="gemini_api",
         api_key=settings.gemini_api_key,
         timeout_s=min(300.0, settings.omni_request_timeout_s),
+        ledger_path=settings.omni_llm_ledger,
+        max_calls=settings.omni_max_llm_calls,
     )

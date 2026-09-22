@@ -147,10 +147,13 @@ class Settings(BaseSettings):
     omni_pricing_file: str = "pricing.yaml"
 
     # ── Switches ────────────────────────────────────────────────────────────
+    omni_llm_ledger: Path | None = None
+    omni_max_llm_calls: int = 24
     run_live_video_tests: bool = False
     omni_keep_raw_responses: bool = True
     omni_log_level: str = "INFO"
     omni_request_timeout_s: float = 600.0
+    omni_query_timeout_s: float = Field(default=60.0, gt=0)
 
     def resolve_project(self, override: str | None = None) -> str:
         project = override or self.google_cloud_project

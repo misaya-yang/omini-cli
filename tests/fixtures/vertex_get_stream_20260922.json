@@ -1,0 +1,118 @@
+{
+  "source": "Observed Vertex GET stream=true on 2026-09-22; IDs and media replaced for the fixture.",
+  "events": [
+    {
+      "interaction": {
+        "id": "fixture-interaction",
+        "status": "in_progress",
+        "object": "interaction",
+        "model": "gemini-omni-1.1-flash-preview"
+      },
+      "event_type": "interaction.created"
+    },
+    {
+      "interaction_id": "fixture-interaction",
+      "status": "in_progress",
+      "event_type": "interaction.status_update"
+    },
+    {
+      "index": 0,
+      "step": {
+        "type": "thought"
+      },
+      "event_type": "step.start"
+    },
+    {
+      "index": 0,
+      "delta": {
+        "content": {
+          "type": "text",
+          "text": "fixture thought summary"
+        },
+        "type": "thought_summary"
+      },
+      "event_type": "step.delta"
+    },
+    {
+      "index": 0,
+      "delta": {
+        "content": {
+          "type": "text",
+          "text": "fixture thought summary"
+        },
+        "type": "thought_summary"
+      },
+      "event_type": "step.delta"
+    },
+    {
+      "index": 0,
+      "delta": {
+        "signature": "fixture-signature",
+        "type": "thought_signature"
+      },
+      "event_type": "step.delta"
+    },
+    {
+      "index": 0,
+      "event_type": "step.stop"
+    },
+    {
+      "index": 1,
+      "step": {
+        "type": "model_output"
+      },
+      "event_type": "step.start"
+    },
+    {
+      "index": 1,
+      "delta": {
+        "mime_type": "video/mp4",
+        "data": "FIXTURE_VIDEO_BASE64",
+        "type": "video"
+      },
+      "event_type": "step.delta"
+    },
+    {
+      "index": 1,
+      "event_type": "step.stop"
+    },
+    {
+      "interaction": {
+        "id": "fixture-interaction",
+        "status": "completed",
+        "usage": {
+          "total_tokens": 16928,
+          "total_input_tokens": 10938,
+          "input_tokens_by_modality": [
+            {
+              "modality": "audio",
+              "tokens": 227
+            },
+            {
+              "modality": "text",
+              "tokens": 317
+            },
+            {
+              "modality": "video",
+              "tokens": 10394
+            }
+          ],
+          "total_output_tokens": 5793,
+          "output_tokens_by_modality": [
+            {
+              "modality": "video",
+              "tokens": 5793
+            }
+          ],
+          "total_thought_tokens": 197
+        },
+        "created": "2026-09-22T10:30:56Z",
+        "updated": "2026-09-22T10:30:56Z",
+        "service_tier": "standard",
+        "object": "interaction",
+        "model": "gemini-omni-1.1-flash-preview"
+      },
+      "event_type": "interaction.completed"
+    }
+  ]
+}

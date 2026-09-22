@@ -10,7 +10,7 @@ Retry discipline (§24.11, handoff §"Response handling"):
 
 | outcome                     | action                                        |
 |-----------------------------|-----------------------------------------------|
-| 5xx, no interaction created | retry, max 2, exponential backoff             |
+| 5xx                         | stop; outcome unknown, never repeat POST      |
 | 429                         | stop; report. Never rotate keys (§24.5)       |
 | 401 / 403 / 400             | stop; classify                                |
 | safety refusal              | stop; surface verbatim, never auto-rewrite    |
@@ -25,10 +25,10 @@ than a second paid request.
 from __future__ import annotations
 
 import json
-import random
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 from omni_homevlog.errors import (
     ConfigError,
@@ -49,9 +49,7 @@ VERTEX_API_ROOT = "https://aiplatform.googleapis.com/v1beta1"
 GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 INTERACTIONS_PATH = "interactions"
 
-MAX_SERVER_ERROR_RETRIES = 2
-_BACKOFF_BASE_S = 1.0
-_BACKOFF_CAP_S = 20.0
+MAX_SERVER_ERROR_RETRIES = 0
 
 
 @dataclass(slots=True)
@@ -75,7 +73,7 @@ def vertex_interactions_url(project: str, location: str = "global") -> str:
 
 def vertex_interaction_url(project: str, location: str, interaction_id: str) -> str:
     base = vertex_interactions_url(project, location)
-    return f"{base}/{interaction_id}"
+    return f"{base}/{quote(interaction_id, safe='')}"
 
 
 def gemini_interactions_url() -> str:
@@ -89,11 +87,13 @@ class BaseTransport:
         self,
         *,
         timeout_s: float = 600.0,
+        query_timeout_s: float = 60.0,
         keep_raw: bool = True,
         debug_dir: str | None = None,
         max_server_retries: int = MAX_SERVER_ERROR_RETRIES,
     ) -> None:
         self.timeout_s = timeout_s
+        self.query_timeout_s = query_timeout_s
         self.keep_raw = keep_raw
         self.debug_dir = debug_dir
         self.max_server_retries = max_server_retries
@@ -122,65 +122,46 @@ class BaseTransport:
     # ── public API ─────────────────────────────────────────────────────────
 
     def create_interaction(self, payload: dict[str, Any]) -> TransportResult:
-        """POST one interaction. At most one logical request, modulo 5xx retries."""
-        url = self.create_url()
-        headers = self._auth_headers()
-
-        attempt = 0
-        last_error: ProviderError | None = None
-        while attempt <= self.max_server_retries:
-            if attempt:
-                delay = min(_BACKOFF_CAP_S, _BACKOFF_BASE_S * (2 ** (attempt - 1)))
-                delay += random.uniform(0, 0.25 * delay)
-                logger.info(
-                    f"Retrying after server error in {delay:.1f}s (attempt {attempt + 1})",
-                    extra={"extra_fields": {"provider": self.describe()}},
-                )
-                time.sleep(delay)
-
-            started = time.monotonic()
-            try:
-                response = self._post(url, payload, headers)
-            except RequestTimeoutUnknownOutcome:
-                # Never retried: the generation may exist. Let it propagate.
-                raise
-            except ProviderError as exc:
-                finished = time.monotonic()
-                last_error = exc
-                if exc.retryable and attempt < self.max_server_retries:
-                    attempt += 1
-                    continue
-                self._dump_fixture("create_error", payload, str(exc), finished)
-                raise
-            finished = time.monotonic()
-
-            raw_text = _body_text(response)
-            self._dump_fixture("create_response", payload, raw_text, finished)
-
-            if getattr(response, "status_code", 200) >= 400:
-                # Classify *inside* the loop. An earlier version raised here,
-                # outside the `except ProviderError` arm above, so the retry branch
-                # was unreachable and a transient 503 failed a paid render on the
-                # first attempt while the error still advertised `retryable=True`.
-                error = self._classify_response_error(response, raw_text)
-                if error.retryable and attempt < self.max_server_retries:
-                    last_error = error
-                    attempt += 1
-                    continue
-                raise error
-
-            return TransportResult(
-                envelope=parse_interaction(raw_text),
-                http_status=int(getattr(response, "status_code", 200)),
-                started_at=started,
-                finished_at=finished,
-                raw_text=raw_text,
+        """Exactly one paid POST. A 5xx does not prove generation never started."""
+        started = time.monotonic()
+        try:
+            response = self._post(self.create_url(), payload, self._auth_headers())
+        except RequestTimeoutUnknownOutcome:
+            raise
+        except ProviderError as exc:
+            if exc.http_status is None or exc.http_status >= 500:
+                raise RequestTimeoutUnknownOutcome(
+                    "Video request outcome is unknown; query before retrying.",
+                    interaction_id=exc.interaction_id,
+                ) from exc
+            raise
+        finished = time.monotonic()
+        raw_text = _body_text(response)
+        self._dump_fixture("create_response", payload, raw_text, finished)
+        status = int(getattr(response, "status_code", 200))
+        if status >= 500:
+            raise RequestTimeoutUnknownOutcome(
+                f"Video POST returned {status}; generation may already exist. Not retried.",
+                detail={"http_status": status},
             )
-
-        # Exhausted the retry budget on 5xx. The server proved no interaction was
-        # created on each attempt, so this is a clean failure.
-        assert last_error is not None
-        raise last_error
+        if status >= 400:
+            raise self._classify_response_error(response, raw_text)
+        try:
+            envelope = parse_interaction(raw_text)
+        except ProviderError as exc:
+            if exc.http_status and exc.http_status >= 500:
+                raise RequestTimeoutUnknownOutcome(
+                    "Video stream failed with a server error; not retried.",
+                    interaction_id=exc.interaction_id,
+                ) from exc
+            raise
+        return TransportResult(
+            envelope=envelope,
+            http_status=status,
+            started_at=started,
+            finished_at=finished,
+            raw_text=raw_text,
+        )
 
     def get_interaction(self, interaction_id: str) -> TransportResult:
         """Fetch an interaction's current state. Read-only and free.
@@ -294,7 +275,9 @@ class VertexRestTransport(BaseTransport):
         return vertex_interactions_url(self.project, self.location)
 
     def get_url(self, interaction_id: str) -> str:
-        return vertex_interaction_url(self.project, self.location, interaction_id)
+        # Verified 2026-09-22: unary GET fails for a stored Omni video while
+        # streaming GET returns identical bytes in step.delta events.
+        return vertex_interaction_url(self.project, self.location, interaction_id) + "?stream=true"
 
     def _auth_headers(self) -> dict[str, str]:
         # The Authorization header is injected by AuthorizedSession. We never
@@ -325,7 +308,7 @@ class VertexRestTransport(BaseTransport):
                 url,
                 headers=headers,
                 json=json_body,
-                timeout=self.timeout_s,
+                timeout=self.query_timeout_s if method == "GET" else self.timeout_s,
             )
         except requests.exceptions.Timeout as exc:
             raise RequestTimeoutUnknownOutcome(
@@ -422,7 +405,7 @@ class GeminiApiRestTransport(BaseTransport):
                 url,
                 headers=headers,
                 json=json_body,
-                timeout=self.timeout_s,
+                timeout=self.query_timeout_s if method == "GET" else self.timeout_s,
             )
         except requests.exceptions.Timeout as exc:
             raise RequestTimeoutUnknownOutcome(

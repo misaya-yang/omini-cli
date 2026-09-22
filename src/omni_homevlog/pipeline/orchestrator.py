@@ -102,6 +102,21 @@ class Orchestrator:
 
     def run(self) -> RunReport:
         """Drive the job as far as it will go."""
+        from omni_homevlog.storage.locking import job_lock
+
+        with job_lock(self.ctx.settings.data_dir() / "locks" / f"{self.ctx.job_id}.lock"):
+            self.ctx.reload()
+            from omni_homevlog.pipeline.context import budget_from_manifest
+
+            self.ctx.budget = budget_from_manifest(self.ctx.manifest, self.ctx.spec)
+            return self._run_locked()
+
+    def _run_locked(self) -> RunReport:
+        if any(not r.outcome_known for r in self.ctx.manifest.interactions):
+            self.report.stopped_because = (
+                "Resolve pending interactions with resume before any generation."
+            )
+            return self.report
         stages = 0
         while stages < self.max_stages:
             stages += 1
@@ -127,6 +142,9 @@ class Orchestrator:
                 self.report.stopped_because = f"budget: {exc.message}"
                 break
             except RequestTimeoutUnknownOutcome as exc:
+                if exc.code == "interaction_pending":
+                    self.report.stopped_because = f"Background render {exc.interaction_id} is running; use resume."
+                    break
                 self.report.stopped_because = (
                     "an unknown-outcome request needs resolving before anything else "
                     f"runs: {exc.message}"
@@ -541,10 +559,13 @@ class Orchestrator:
         gates = self.ctx.spec.human_gates
         if stage == "final" and "final" not in gates:
             return True
+        latest = self.ctx.manifest.last_usable_artifact()
         approvals = [
             entry
             for entry in self.ctx.manifest.state_history
-            if entry.get("note", "").startswith(f"approved:{stage}")
+            if entry.get("note", "").split(" — ", 1)[0] == f"approved:{stage}"
+            and (stage != "final" or not entry.get("artifact_id") or
+                 (latest is not None and entry["artifact_id"] == latest.interaction_id))
         ]
         return bool(approvals)
 

@@ -95,6 +95,15 @@ class JobContext:
         )
         budget = budget_from_manifest(manifest, spec)
         capabilities = _capabilities_from_manifest(manifest)
+        binding.provider.capabilities = capabilities
+        cfg = cfg.model_copy(
+            update={
+                "omni_provider": spec.provider,
+                "google_cloud_project": spec.project,
+                "omni_llm_ledger": paths.debug_dir / "llm_calls.json",
+                "omni_max_llm_calls": spec.max_llm_calls,
+            }
+        )
 
         return cls(
             manifest=manifest,
@@ -130,6 +139,17 @@ class JobContext:
         spec.project = binding.project
         spec.model = binding.model
         spec.location = binding.location
+        if spec.max_estimated_cost_usd is None:
+            spec.max_estimated_cost_usd = cfg.omni_max_estimated_cost_usd
+        binding.provider.capabilities = capabilities
+        cfg = cfg.model_copy(
+            update={
+                "omni_provider": spec.provider,
+                "google_cloud_project": spec.project,
+                "omni_llm_ledger": paths.debug_dir / "llm_calls.json",
+                "omni_max_llm_calls": spec.max_llm_calls,
+            }
+        )
 
         manifest = Manifest(
             job_id=job_id,
@@ -241,7 +261,20 @@ class JobContext:
         video_seconds: int = 0,
     ) -> None:
         """Reserve budget and record the event in the manifest + database."""
-        from omni_homevlog.costing import estimate_video_seconds_cost
+        from omni_homevlog.costing import (
+            estimate_video_seconds_cost,
+            has_video_pricing,
+            load_pricing,
+        )
+        from omni_homevlog.errors import BudgetExhaustedError
+
+        pricing = load_pricing(self.settings.omni_pricing_file)
+        if self.budget.max_estimated_cost_usd is not None and not has_video_pricing(
+            self.spec.model or "", pricing
+        ):
+            raise BudgetExhaustedError(
+                "Dollar ceiling cannot be enforced: video pricing is unknown. Configure pricing.yaml first."
+            )
 
         # No falsy-zero guard here. `if video_seconds` skipped the estimate for the
         # value every EDIT reservation passes, so both the cost ceiling and the
@@ -249,7 +282,7 @@ class JobContext:
         # edit authorised the next. The estimator returns zero for zero seconds on
         # its own, which is the correct answer, not a reason to skip it.
         estimated = estimate_video_seconds_cost(
-            model=self.spec.model or "", video_seconds=video_seconds
+            model=self.spec.model or "", video_seconds=video_seconds, pricing=pricing
         )
         event = self.budget.authorize(
             kind,
@@ -319,35 +352,39 @@ def budget_from_manifest(manifest: Manifest, spec: ProjectSpec) -> Budget:
         mode=spec.mode,
         target_duration_s=spec.target_duration_s,
         max_total_calls=spec.max_total_calls,
-        max_estimated_cost_usd=get_settings().omni_max_estimated_cost_usd,
+        max_estimated_cost_usd=spec.max_estimated_cost_usd,
     )
 
-    counted = 0
-    seconds = 0
-    cost = Decimal("0")
-    per_kind: dict[str, int] = {}
-
-    for record in manifest.interactions:
-        counted += 1
-        kind = _call_kind_of(record)
-
-        try:
-            requested = int(str(record.duration or "10").rstrip("s"))
-        except ValueError:
-            requested = 10
-        seconds += requested
-
-        if record.estimated_cost_usd is not None:
-            cost += record.estimated_cost_usd
-
-        key = f"{kind}:{record.segment_index}"
-        per_kind[key] = per_kind.get(key, 0) + 1
-
-    budget.calls_made = counted
-    budget.video_seconds_requested = seconds
-    budget.estimated_cost_usd = cost
-    for key, value in per_kind.items():
-        budget._by_kind_segment[key] = value
+    for limit_name in (
+        "max_seed_attempts",
+        "max_edit_attempts_per_segment",
+        "max_regenerations_per_segment",
+        "max_video_seconds_requested",
+    ):
+        if limit_name in manifest.budget:
+            setattr(budget, limit_name, int(manifest.budget[limit_name]))
+    reservations = [e for e in manifest.budget_events if e.kind == "authorize"]
+    if reservations:
+        for event in reservations:
+            budget.calls_made += 1
+            budget.video_seconds_requested += event.video_seconds
+            budget.estimated_cost_usd += event.estimated_cost_usd
+            budget._by_kind_segment[f"{event.call_kind}:{event.segment_index}"] += 1
+        budget.estimated_cost_usd += sum(
+            (e.estimated_cost_usd for e in manifest.budget_events if e.kind == "spend"),
+            Decimal("0"),
+        )
+    else:
+        # Backward compatibility with jobs written before reservation events.
+        for record in manifest.interactions:
+            budget.calls_made += 1
+            kind = _call_kind_of(record)
+            budget._by_kind_segment[f"{kind}:{record.segment_index}"] += 1
+            try:
+                budget.video_seconds_requested += int(str(record.duration or "10").rstrip("s"))
+            except ValueError:
+                budget.video_seconds_requested += 10
+            budget.estimated_cost_usd += record.estimated_cost_usd or Decimal("0")
 
     return budget
 

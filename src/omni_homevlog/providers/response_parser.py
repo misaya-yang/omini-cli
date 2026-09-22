@@ -267,10 +267,35 @@ def _from_event_stream(events: list[dict[str, Any]]) -> tuple[dict[str, Any], st
     completed: dict[str, Any] | None = None
     latest_any: dict[str, Any] | None = None
     sse_error: dict[str, Any] | None = None
+    steps: dict[int, dict[str, Any]] = {}
+    seen_events: set[str] = set()
+    interaction_id: str | None = None
 
     for event in events:
+        event_id = event.get("event_id")
+        if isinstance(event_id, str):
+            if event_id in seen_events:
+                continue
+            seen_events.add(event_id)
         etype = str(event.get("event_type") or event.get("type") or "")
         interaction = event.get("interaction")
+        observed_id = (
+            interaction.get("id") if isinstance(interaction, dict) else event.get("interaction_id")
+        )
+        if observed_id:
+            if interaction_id and interaction_id != observed_id:
+                raise ProviderError("Stream mixes different interaction IDs.")
+            interaction_id = str(observed_id)
+        index = event.get("index")
+        if isinstance(index, int) and etype == "step.start" and isinstance(event.get("step"), dict):
+            steps[index] = dict(event["step"])
+        elif isinstance(index, int) and etype == "step.delta":
+            step = steps.get(index)
+            delta = event.get("delta")
+            if (step is not None and step.get("type") == "model_output" and isinstance(delta, dict)
+                    and delta.get("type") in ("video", "text", "image", "audio")):
+                # Observed GET: video is a delta, completion has status/usage only.
+                step.setdefault("content", []).append(dict(delta))
         if etype == "interaction.completed" and isinstance(interaction, dict):
             completed = interaction
         elif etype == "error":
@@ -279,7 +304,10 @@ def _from_event_stream(events: list[dict[str, Any]]) -> tuple[dict[str, Any], st
             latest_any = interaction
 
     if completed is not None:
-        return completed, "sse:interaction.completed"
+        payload = dict(completed)
+        if not payload.get("steps") and steps:
+            payload["steps"] = [steps[i] for i in sorted(steps)]
+        return payload, "sse:interaction.completed"
 
     if sse_error is not None:
         err = sse_error.get("error") or sse_error
@@ -290,11 +318,15 @@ def _from_event_stream(events: list[dict[str, Any]]) -> tuple[dict[str, Any], st
         raise ProviderError(
             str(err.get("message") if isinstance(err, dict) else err),
             provider_code=str(err.get("code")) if isinstance(err, dict) else None,
+            interaction_id=interaction_id,
             detail={"sse_error": err},
         )
 
     if latest_any is not None:
-        return latest_any, "sse:other"
+        payload = dict(latest_any)
+        if not payload.get("steps") and steps:
+            payload["steps"] = [steps[i] for i in sorted(steps)]
+        return payload, "sse:other"
 
     raise ProviderError(
         "Event stream contained no interaction object.",
@@ -330,6 +362,8 @@ def _collect_video_contents(value: Any, out: list[VideoContent], depth: int = 0)
         return
 
     if isinstance(value, dict):
+        if value.get("type") in ("user_input", "tool_result", "thought", "thinking"):
+            return
         if value.get("type") == "video" and ("uri" in value or "data" in value):
             out.append(
                 VideoContent(

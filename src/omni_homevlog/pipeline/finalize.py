@@ -35,7 +35,7 @@ from omni_homevlog.pipeline.extend import (
     chain_total_seconds,
     verify_chain_continuity,
 )
-from omni_homevlog.schemas import JobState, MediaInfo, utc_now_iso
+from omni_homevlog.schemas import JobState, MediaInfo
 from omni_homevlog.storage.local import atomic_write_json
 
 logger = get_logger("finalize")
@@ -65,7 +65,9 @@ def finalize(
     copy_verbatim_bytes: bool = True,
 ) -> FinalizeOutcome:
     """Produce the final deliverable from the accepted chain."""
-    from omni_homevlog.media.transcode import copy_verbatim, remux
+    import hashlib
+
+    from omni_homevlog.media.transcode import copy_verbatim, remux, strip_audio
 
     artifact = ctx.manifest.last_usable_artifact()
     if artifact is None or not artifact.local_path:
@@ -90,7 +92,16 @@ def finalize(
 
     # Byte-for-byte by default: preserves content credentials exactly, and is the
     # only transform with no chance of altering the picture.
-    result = copy_verbatim(source, target) if copy_verbatim_bytes else remux(source, target)
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    if not ctx.spec.audio_enabled:
+        result = strip_audio(source, target)
+        if result.media.has_audio is not False:
+            raise OmniVlogError("Silent output could not be verified; original retained.")
+        ctx.note("Silent derivative created on explicit --no-audio request; provider original and its content credentials are retained at " + str(source))
+    else:
+        result = copy_verbatim(source, target) if copy_verbatim_bytes else remux(source, target)
+    if hashlib.sha256(source.read_bytes()).hexdigest() != source_sha:
+        raise OmniVlogError("Finalization changed the provider original.")
 
     credentials = inspect_content_credentials(target, provider=ctx.binding.provider_name)
     for note in credentials.notes or []:
@@ -99,6 +110,9 @@ def finalize(
     ctx.manifest = ctx.store.mutate(
         final_path=str(target),
         final_derived=result.derived,
+        final_source_path=str(source),
+        final_source_sha256=source_sha,
+        final_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
         c2pa_present=credentials.c2pa_present,
         synthid_expected=credentials.synthid_expected,
     )
@@ -135,6 +149,11 @@ def export(
     allow_derived: bool = True,
 ) -> Path:
     """Copy the finalized file to a user-specified location."""
+    ctx.reload()
+    if ctx.manifest.state is not JobState.COMPLETE:
+        raise OmniVlogError("Export requires COMPLETE: finish review and approval first.")
+    if ctx.manifest.final_derived and not allow_derived:
+        raise OmniVlogError("Derived export is disabled; no output was written.")
     source = Path(ctx.manifest.final_path) if ctx.manifest.final_path else None
     if source is None or not source.is_file():
         outcome = finalize(ctx)
@@ -154,6 +173,8 @@ def export(
         )
 
     ctx.note(f"exported to {output}")
+    write_manifest_export(ctx)
+    write_manifest_export(ctx, output.with_suffix(".manifest.json"))
     ctx.mirror("all")
     return output
 
@@ -161,7 +182,7 @@ def export(
 def mark_complete(ctx: JobContext) -> None:
     """Move the job to COMPLETE. Refuses if the chain is structurally broken."""
     ok, problems = verify_chain_continuity(ctx)
-    if not ok and len(ctx.manifest.segment_artifacts()) > 1:
+    if not ok:
         ctx.error("refusing to mark COMPLETE: " + "; ".join(problems))
         raise OmniVlogError(
             "The chain is not structurally continuous, so the job cannot be marked "
@@ -169,6 +190,7 @@ def mark_complete(ctx: JobContext) -> None:
             detail={"problems": problems},
         )
     ctx.manifest = ctx.store.transition(target=JobState.COMPLETE, note="finalized")
+    write_manifest_export(ctx)
 
 
 #: Resolutions ordered by cost, so we can refuse a downward "upgrade".
@@ -232,7 +254,6 @@ def write_manifest_export(ctx: JobContext, path: Path | None = None) -> Path:
     """Write a standalone copy of the manifest next to the final video (§25)."""
     target = path or (ctx.paths.final_dir / "manifest.json")
     payload = ctx.store.load().model_dump(mode="json")
-    payload["exported_at"] = utc_now_iso()
     atomic_write_json(target, payload)
     return target
 
@@ -240,6 +261,11 @@ def write_manifest_export(ctx: JobContext, path: Path | None = None) -> Path:
 def summary(ctx: JobContext) -> dict[str, Any]:
     """Everything `omni-vlog status` shows, assembled in one place."""
     manifest = ctx.store.load()
+    from omni_homevlog.costing import has_video_pricing, load_pricing
+
+    budget = ctx.budget.snapshot()
+    if not has_video_pricing(ctx.binding.model, load_pricing(ctx.settings.omni_pricing_file)):
+        budget["estimated_cost_usd"] = None
     return {
         "job_id": manifest.job_id,
         "state": str(manifest.state),
@@ -254,7 +280,7 @@ def summary(ctx: JobContext) -> dict[str, Any]:
         "segments_rendered": len(manifest.segment_artifacts()),
         "chain_seconds": round(chain_total_seconds(ctx), 2),
         "chain": chain_summary(ctx),
-        "budget": ctx.budget.snapshot(),
+        "budget": budget,
         "interactions": len(manifest.interactions),
         "unresolved_interactions": [
             r.interaction_id for r in manifest.interactions if not r.outcome_known

@@ -80,6 +80,13 @@ class PromptCompiler:
             duration_s=segment.intended_duration_s,
             aspect_ratio=self.spec.aspect_ratio if self.spec else "9:16",
         )
+        from omni_homevlog.providers.request_builder import seed_input_mode
+        task, mode = seed_input_mode([a.role for a in self.references])
+        if task == "image_to_video":
+            instruction = "Use the first supplied image as the literal opening frame."
+            if mode == "first_last_frame":
+                instruction += " Use the second supplied image as the literal closing frame and connect them in one continuous motion."
+            text = text.replace(seed_prompts.REFERENCE_INSTRUCTION, instruction).replace(seed_prompts.CLOSING, "Preserve the supplied frame composition without adding text, panels or cuts.")
         warnings = self._check_action_density(segment, text)
         guardrails.assert_prompt_shape(text)
         return CompiledPrompt(

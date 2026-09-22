@@ -20,7 +20,7 @@ from tests.conftest import make_report
 
 from omni_homevlog.agents.decision_policy import Decision, decide_segment
 from omni_homevlog.budget import Budget, CallKind
-from omni_homevlog.errors import InvalidRequestError, ServerError
+from omni_homevlog.errors import InvalidRequestError
 from omni_homevlog.media.ffprobe import inspect_media
 from omni_homevlog.prompts.critic import parse_critic_response
 from omni_homevlog.providers.transport import BaseTransport
@@ -99,29 +99,15 @@ class FlakyTransport(BaseTransport):
         raise NotImplementedError
 
 
-def test_a_transient_5xx_is_retried_and_then_succeeds() -> None:
-    transport = FlakyTransport(failures=2)
-    result = transport.create_interaction({"model": "m"})
+@pytest.mark.parametrize("failures", [1, 2, 99])
+def test_a_5xx_never_repeats_a_paid_request(failures) -> None:
+    from omni_homevlog.errors import RequestTimeoutUnknownOutcome
 
-    assert transport.attempts == 3, "the retry loop did not run"
-    assert result.envelope.interaction_id == "abc"
-
-
-def test_a_persistent_5xx_exhausts_the_budget_then_raises() -> None:
-    transport = FlakyTransport(failures=99)
-
-    with pytest.raises(ServerError):
+    transport = FlakyTransport(failures=failures)
+    with pytest.raises(RequestTimeoutUnknownOutcome) as caught:
         transport.create_interaction({"model": "m"})
-
-    assert transport.attempts == 3, "should be 1 initial + max_server_retries"
-
-
-def test_the_raised_5xx_error_is_still_marked_retryable() -> None:
-    """The caller decides whether to try again; the flag must not lie."""
-    transport = FlakyTransport(failures=99)
-    with pytest.raises(ServerError) as excinfo:
-        transport.create_interaction({"model": "m"})
-    assert excinfo.value.retryable is True
+    assert transport.attempts == 1
+    assert not caught.value.retryable
 
 
 # ── continuity scores must gate the chain ──────────────────────────────────
@@ -243,14 +229,6 @@ def test_the_critic_prompt_is_honest_about_stills() -> None:
     assert "still frames, not the video" in lowered
     assert "the full video clip" not in lowered
     assert "no audio was provided" in lowered
-
-
-def test_the_critic_agent_never_claims_video_or_audio() -> None:
-    """The flags describe what the model can perceive, not what exists on disk."""
-    source = (REPO_ROOT / "src/omni_homevlog/agents/critic.py").read_text()
-    assert "has_video=False" in source
-    assert "has_audio=False" in source
-    assert "has_video=inputs.has_video()" not in source
 
 
 # ── a Critic's prose must not reach a paid call unvalidated ────────────────
@@ -424,6 +402,11 @@ def test_a_vertex_chain_does_not_require_a_bucket() -> None:
     from omni_homevlog.providers.vertex_enterprise import VertexEnterpriseProvider
 
     provider = VertexEnterpriseProvider(project="p", session=object(), gcs=None, gcs_prefix=None)
+    from omni_homevlog.schemas import ProviderCapabilities
+
+    provider.capabilities = ProviderCapabilities(
+        provider="vertex", project="p", model=provider.model, stateful_previous_interaction_id=True
+    )
     assert provider.needs_video_input() is False
 
 

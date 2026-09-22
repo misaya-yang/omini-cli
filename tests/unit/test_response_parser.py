@@ -311,3 +311,77 @@ def test_multiple_model_output_steps_yield_multiple_videos() -> None:
     assert len(envelope.videos) == 2
     assert envelope.video is not None
     assert envelope.video.uri == "gs://b/one.mp4"
+
+
+def test_recorded_vertex_get_stream_reconstructs_output():
+    from pathlib import Path
+
+    from tests.conftest import build_minimal_mp4
+
+    fixture = json.loads(
+        (Path(__file__).parents[1] / "fixtures/vertex_get_stream_20260922.json").read_text()
+    )
+    data = build_minimal_mp4(duration_s=9)
+    for event in fixture["events"]:
+        if event.get("delta", {}).get("type") == "video":
+            event["delta"]["data"] = base64.b64encode(data).decode()
+    envelope = parse_interaction(sse_body(fixture["events"]), expected_id="fixture-interaction")
+    assert envelope.status == "completed"
+    assert envelope.model == "gemini-omni-1.1-flash-preview"
+    assert len(envelope.videos) == 1
+    assert envelope.require_video().decode() == data
+    assert envelope.usage["total_output_tokens"] == 5793
+
+
+def test_query_never_selects_uploaded_video_as_generated_output():
+    payload = {
+        "id": "x",
+        "status": "completed",
+        "steps": [
+            {"type": "user_input", "content": [{"type": "video", "uri": "gs://input/old.mp4"}]},
+            {"type": "model_output", "content": [{"type": "video", "uri": "gs://output/new.mp4"}]},
+        ],
+    }
+    assert parse_interaction(payload).require_video().uri == "gs://output/new.mp4"
+    payload["steps"].pop()
+    with pytest.raises(ProviderError, match="no video"):
+        parse_interaction(payload).require_video()
+
+
+def test_snapshot_with_steps_does_not_duplicate_stream_deltas():
+    complete = completed_interaction_event(interaction_id="x", video_uri="gs://output/new.mp4")
+    envelope = parse_interaction(
+        sse_body(
+            [
+                {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
+                {
+                    "event_type": "step.delta",
+                    "index": 0,
+                    "event_id": "event-1",
+                    "delta": {"type": "video", "uri": "gs://output/new.mp4"},
+                },
+                complete,
+            ]
+        )
+    )
+    assert len(envelope.videos) == 1
+
+
+def test_stream_deduplicates_event_ids_and_rejects_mixed_interactions():
+    delta = {
+        "event_type": "step.delta",
+        "index": 0,
+        "event_id": "same",
+        "delta": {"type": "video", "uri": "gs://out/video.mp4"},
+    }
+    events = [
+        {"event_type": "interaction.created", "interaction": {"id": "x", "status": "in_progress"}},
+        {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
+        delta,
+        delta,
+        {"event_type": "interaction.completed", "interaction": {"id": "x", "status": "completed"}},
+    ]
+    assert len(parse_interaction(sse_body(events)).videos) == 1
+    events[-1]["interaction"]["id"] = "wrong-id"
+    with pytest.raises(ProviderError, match="mixes"):
+        parse_interaction(sse_body(events))

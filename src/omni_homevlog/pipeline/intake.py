@@ -202,6 +202,12 @@ class ReferenceSanitizer:
                 warnings=["vision check could not run"],
             )
 
+        required = SANITIZER_RESPONSE_SCHEMA["required"]
+        assert isinstance(required, list)
+        if not isinstance(payload, dict) or any(type(payload.get(k)) is not bool for k in required):
+            return SanitizerReport(degraded=True, degradation_reason="Sanitizer returned missing or non-boolean required fields")
+        if payload.get("subject_is_adult") is not None and type(payload["subject_is_adult"]) is not bool:
+            return SanitizerReport(degraded=True, degradation_reason="Sanitizer returned an invalid adult-subject field")
         warnings = payload.get("warnings") or []
         return SanitizerReport(
             has_text_overlay=bool(payload.get("has_text_overlay", False)),
@@ -248,11 +254,10 @@ class ReferenceSanitizer:
                 )
             if vision.multiple_distinct_people:
                 reasons.append("more than one distinct person appears in the image")
-            if requires_identity and vision.subject_is_adult is False:
-                reasons.append(
-                    "the subject does not appear to be an adult; refusing to generate "
-                    "an identity likeness"
-                )
+            if requires_identity and vision.subject_is_adult is not True:
+                reasons.append("an adult subject could not be confirmed for this identity reference")
+            if requires_identity and not vision.is_clean_identity_reference:
+                reasons.append("the vision check did not confirm a clean identity reference")
             if vision.has_text_overlay:
                 reasons.append("text is rendered into the image itself")
 
@@ -264,7 +269,6 @@ class ReferenceSanitizer:
 
         if (
             (vision is None or vision.degraded)
-            and requires_identity
             and not self.allow_degraded_vision
         ):
             reasons.append(

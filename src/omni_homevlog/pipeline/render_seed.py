@@ -77,6 +77,14 @@ def run_render_seed(
     if ctx.spec.mode == "concept":
         resolved_duration = min(ctx.spec.concept_duration_s, resolved_duration)
 
+    from omni_homevlog.errors import CapabilityMissingError
+    from omni_homevlog.providers.request_builder import seed_input_mode
+    seed_task, required_capability = seed_input_mode([a.role for a in ctx.manifest.references])
+    caps = ctx.capabilities
+    if caps is None or not getattr(caps, required_capability):
+        raise CapabilityMissingError(
+            "Seed input mode has no verified capability snapshot; run doctor first."
+        )
     compiled = ctx.compiler.compile_seed(segment)
     if compiled.warnings:
         for warning in compiled.warnings:
@@ -108,7 +116,7 @@ def run_render_seed(
     )
 
     record_dispatch_pending(
-        ctx, segment_index=0, attempt_index=attempt_index, task="reference_to_video"
+        ctx, segment_index=0, attempt_index=attempt_index, task=seed_task
     )
 
     import asyncio
@@ -126,6 +134,8 @@ def run_render_seed(
         )
     except RequestTimeoutUnknownOutcome as exc:
         _record_unknown_outcome(ctx, segment_index=0, attempt_index=attempt_index, exc=exc)
+        if exc.code == "interaction_pending":
+            raise
         ctx.manifest = ctx.store.transition(
             target=JobState.NEEDS_HUMAN,
             note=(
@@ -140,7 +150,6 @@ def run_render_seed(
         ctx.error(f"seed render failed: {exc}")
         raise
 
-    clear_dispatch_pending(ctx, segment_index=0, attempt_index=attempt_index)
     _persist(
         ctx,
         artifact,
@@ -195,19 +204,37 @@ def _persist(
         outcome_known=True,
     )
     ctx.db.save_interaction(record)
-    ctx.manifest = ctx.store.mutate(interactions=[*ctx.manifest.interactions, record])
+    placeholder = pending_id(ctx.job_id, segment_index, attempt_index)
+    ctx.manifest = ctx.store.mutate(
+        interactions=[
+            r
+            for r in ctx.manifest.interactions
+            if r.interaction_id not in (placeholder, artifact.interaction_id)
+        ]
+        + [record]
+    )
+    ctx.db.delete_interaction(placeholder)
 
-    # Reconcile the estimate against what the provider says it produced. The
-    # reservation is sized from the requested seconds; the usage counts are what
-    # was actually billed, and `Budget.record_cost` existed for exactly this and
-    # had no caller — so the ceiling drifted from reality on every job.
-    if artifact.usage and artifact.estimated_cost_usd is not None:
-        from omni_homevlog.costing import estimate_from_usage
-
-        realised = estimate_from_usage(model=artifact.model, usage=artifact.usage)
-        delta = realised - artifact.estimated_cost_usd
+    reservation = next(
+        (
+            e
+            for e in reversed(ctx.manifest.budget_events)
+            if e.kind == "authorize"
+            and e.segment_index == segment_index
+            and e.attempt_index == attempt_index
+        ),
+        None,
+    )
+    if artifact.estimated_cost_usd is not None and reservation is not None:
+        delta = artifact.estimated_cost_usd - reservation.estimated_cost_usd
         if delta:
-            ctx.budget.record_cost(delta)
+            from omni_homevlog.schemas import BudgetEvent
+
+            events: list[BudgetEvent] = []
+            ctx.budget.record_cost(delta, events)
+            for event in events:
+                ctx.manifest = ctx.store.record_budget_event(event)
+    ctx.manifest = ctx.store.mutate(budget=ctx.budget.snapshot())
     _ = parent
 
 
@@ -222,6 +249,7 @@ def record_dispatch_pending(
     segment_index: int,
     attempt_index: int,
     task: str,
+    parent_interaction_id: str | None = None,
 ) -> str:
     """Write a ledger row *before* the request goes out (§5.1).
 
@@ -236,7 +264,20 @@ def record_dispatch_pending(
 
     The row is retired by `clear_dispatch_pending` once a real result arrives.
     """
+    event = next(
+        (
+            e
+            for e in reversed(ctx.manifest.budget_events)
+            if e.kind == "authorize"
+            and e.segment_index == segment_index
+            and e.attempt_index == attempt_index
+        ),
+        None,
+    )
     record = InteractionRecord(
+        parent_interaction_id=parent_interaction_id,
+        duration=f"{event.video_seconds}s" if event else None,
+        estimated_cost_usd=event.estimated_cost_usd if event else None,
         interaction_id=pending_id(ctx.job_id, segment_index, attempt_index),
         job_id=ctx.job_id,
         segment_index=segment_index,
@@ -245,7 +286,7 @@ def record_dispatch_pending(
         project=ctx.binding.project,
         model=ctx.binding.model,
         task=task,
-        call_kind=task if task in ("seed", "extend", "edit", "regenerate") else "seed",
+        call_kind=event.call_kind if event else "seed",
         request_started_at=utc_now_iso(),
         status="dispatched",
         error_message="dispatched; no result observed yet",
@@ -278,15 +319,46 @@ def _record_unknown_outcome(
     record uses a synthetic id and `outcome_known=False`. `resume` treats these as
     blockers that require a human decision rather than as retryable failures.
     """
+    ctx.reload()
+    current = next(
+        (
+            r
+            for r in ctx.manifest.interactions
+            if not r.outcome_known
+            and r.segment_index == segment_index
+            and r.attempt_index == attempt_index
+        ),
+        None,
+    )
     _rewrite_ledger_row(
         ctx,
-        record_id=pending_id(ctx.job_id, segment_index, attempt_index),
-        status="unknown",
+        record_id=current.interaction_id
+        if current
+        else pending_id(ctx.job_id, segment_index, attempt_index),
+        status="in_progress" if exc.code == "interaction_pending" else "unknown",
         error_code=exc.code,
         error_message=exc.message,
         outcome_known=False,
-        task="reference_to_video" if ctx.manifest.references else "text_to_video",
     )
+    if exc.interaction_id:
+        old_id = (
+            current.interaction_id
+            if current
+            else pending_id(ctx.job_id, segment_index, attempt_index)
+        )
+        rows = [
+            r.model_copy(update={"interaction_id": exc.interaction_id})
+            if r.interaction_id == old_id
+            else r
+            for r in ctx.manifest.interactions
+        ]
+        ctx.manifest = ctx.store.mutate(interactions=rows)
+        ctx.db.delete_interaction(old_id)
+        for row in rows:
+            ctx.db.save_interaction(row)
+    if exc.code == "interaction_pending":
+        ctx.note(f"background render accepted: {exc.interaction_id}; resume to query it")
+        return
     ctx.budget.note_unknown_outcome()
     ctx.error(
         f"segment {segment_index} attempt {attempt_index}: request dispatched but "
@@ -359,7 +431,12 @@ def _record_failed_interaction(
         outcome_known=True,
     )
     ctx.db.save_interaction(record)
-    ctx.manifest = ctx.store.mutate(interactions=[*ctx.manifest.interactions, record])
+    ctx.manifest = ctx.store.mutate(
+        interactions=[
+            r for r in ctx.manifest.interactions if r.interaction_id != record.interaction_id
+        ]
+        + [record]
+    )
 
 
 def seed_artifact(ctx: JobContext) -> RenderArtifact | None:
@@ -389,15 +466,15 @@ def require_human_approval(ctx: JobContext, stage: str) -> None:
     the check never matched an approval and the gate would have blocked forever
     had anything called it.
     """
-    if "each-segment" not in ctx.spec.human_gates:
-        return
-
-    wanted = f"{APPROVAL_PREFIX}{stage}"
-    if not any(
-        str(entry.get("note", "")).startswith(wanted) for entry in ctx.manifest.state_history
-    ):
-        raise HumanGateError(
-            f"Stage {stage!r} requires explicit approval. Run "
-            f"`omni-vlog approve {ctx.job_id} --stage {stage}`.",
-            detail={"stage": stage, "wanted_note": wanted},
-        )
+    stages = []
+    if stage == "segment-0" and "high-res" in ctx.spec.human_gates and ctx.spec.resolution in ("1080p", "4k"):
+        stages.append("high-res")
+    if "each-segment" in ctx.spec.human_gates:
+        stages.append(stage)
+    for required in stages:
+        wanted = f"{APPROVAL_PREFIX}{required}"
+        if any(str(e.get("note", "")).split(" — ", 1)[0] == wanted for e in ctx.manifest.state_history):
+            continue
+        if ctx.manifest.state is not JobState.NEEDS_HUMAN:
+            ctx.manifest = ctx.store.transition(target=JobState.NEEDS_HUMAN, note=f"approval-required:{required}")
+        raise HumanGateError(f"Stage {required!r} requires approval. Run `omni-vlog approve {ctx.job_id} --stage {required}`.", detail={"stage": required})

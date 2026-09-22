@@ -74,9 +74,9 @@ def review_segment(
     # The capability gates: the policy must not recommend an action the surface
     # cannot perform (§8.3 strategy D).
     caps = ctx.capabilities
-    can_edit = bool(caps.edit) if caps is not None else True
+    can_edit = bool(caps.edit) if caps is not None else False
     can_extend = (
-        bool(caps.extend or caps.stateful_previous_interaction_id) if caps is not None else True
+        bool(caps.extend or caps.stateful_previous_interaction_id) if caps is not None else False
     )
 
     decision = decide_segment(
@@ -98,6 +98,7 @@ def review_segment(
         decision=decision,
         segment_index=segment_index,
         attempt_index=attempt_index,
+        interaction_id=artifact.interaction_id,
         critic_model=critic_result.report.critic_model,
         contradictions=critic_result.contradictions,
     )
@@ -136,6 +137,7 @@ def _persist(
     decision: DecisionResult,
     segment_index: int,
     attempt_index: int,
+    interaction_id: str,
     critic_model: str,
     contradictions: list[str],
 ) -> str:
@@ -143,6 +145,7 @@ def _persist(
     payload = {
         "segment_index": segment_index,
         "attempt_index": attempt_index,
+        "interaction_id": interaction_id,
         "reviewed_at": utc_now_iso(),
         "critic_model": critic_model,
         "report": report.model_dump(mode="json"),
@@ -169,13 +172,27 @@ def review_final(ctx: JobContext) -> dict[str, Any]:
     from omni_homevlog.agents.decision_policy import decide_final
 
     reports: list[CritiqueReport] = []
-    for entry in ctx.manifest.quality_reports:
-        raw = entry.get("report")
-        if isinstance(raw, dict):
-            try:
-                reports.append(CritiqueReport.model_validate(raw))
-            except Exception:
-                logger.warning("Skipping an unparsable stored review entry")
+    for artifact in ctx.manifest.segment_artifacts():
+        record = next(
+            (r for r in ctx.manifest.interactions if r.interaction_id == artifact.interaction_id),
+            None,
+        )
+        matches = [
+            e
+            for e in ctx.manifest.quality_reports
+            if e.get("interaction_id") == artifact.interaction_id
+            or (
+                not e.get("interaction_id")
+                and record is not None
+                and e.get("segment_index") == record.segment_index
+                and e.get("attempt_index") == record.attempt_index
+            )
+        ]
+        if not matches:
+            from omni_homevlog.errors import OmniVlogError
+
+            raise OmniVlogError(f"No review for accepted artifact {artifact.interaction_id}")
+        reports.append(CritiqueReport.model_validate(matches[-1]["report"]))
 
     decision = decide_final(
         reports=reports,

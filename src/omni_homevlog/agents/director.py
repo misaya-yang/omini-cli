@@ -119,8 +119,10 @@ def build_director_prompt(
     reference_descriptions: list[str] | None = None,
 ) -> str:
     """The planning instruction. Structured, specific, and bounded."""
-    segment_count = max(1, spec.target_duration_s // 10)
-    segment_seconds = min(10, spec.target_duration_s)
+    segment_count = spec.extension_count + 1
+    segment_seconds = (
+        spec.concept_duration_s if spec.mode == "concept" else min(10, spec.target_duration_s)
+    )
 
     reference_lines: list[str] = []
     if reference_descriptions:
@@ -267,7 +269,7 @@ def validate_plan(plan: DirectorPlan, *, spec: ProjectSpec) -> list[str]:
     warnings: list[str] = []
     problems: list[str] = []
 
-    expected = max(1, spec.target_duration_s // 10)
+    expected = spec.extension_count + 1
     if len(plan.segments) != expected:
         problems.append(
             f"plan has {len(plan.segments)} segments but a {spec.target_duration_s}s "
@@ -483,7 +485,7 @@ def default_plan_for_spec(spec: ProjectSpec, bible: ContinuityBible) -> Director
             continuation_anchor="her palm covering the lens entirely",
         ),
     ]
-    wanted = max(1, spec.target_duration_s // 10)
+    wanted = spec.extension_count + 1
     if wanted > len(segments):
         # Continue the §10 arc rather than truncating it. Slicing a hardcoded
         # 3-element list gave a 40-second job three segments, so it paid for three
@@ -513,6 +515,8 @@ def default_plan_for_spec(spec: ProjectSpec, bible: ContinuityBible) -> Director
                 )
             )
 
+    if spec.mode == "concept":
+        segments[0].intended_duration_s = spec.concept_duration_s
     return DirectorPlan(
         title=spec.title,
         logline=spec.brief,

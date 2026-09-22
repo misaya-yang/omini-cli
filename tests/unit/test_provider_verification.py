@@ -253,3 +253,99 @@ def test_the_output_filename_reflects_the_attempt(tmp_path) -> None:
 
     assert artifact.artifact_relpath is not None
     assert artifact.artifact_relpath.endswith("attempt_02_edit.mp4")
+
+
+def test_recovery_materialises_inline_response_without_generation(tmp_path):
+    import asyncio
+
+    payload = envelope_with(base64.b64encode(build_minimal_mp4(duration_s=3)).decode())
+    provider = make_provider(tmp_path, payload)
+    called = []
+
+    def query(interaction_id):
+        called.append(interaction_id)
+        return TransportResult(
+            envelope=parse_interaction(payload),
+            http_status=200,
+            started_at=0,
+            finished_at=0.1,
+            raw_text="",
+        )
+
+    provider.transport.get_interaction = query
+    artifact = asyncio.run(provider.get_interaction("int-test-0001"))
+    assert called == ["int-test-0001"]
+    assert Path(artifact.local_path).is_file()
+    assert artifact.media.duration_s == 3
+
+
+def test_pending_response_keeps_queryable_id(tmp_path):
+    from omni_homevlog.errors import RequestTimeoutUnknownOutcome
+
+    provider = make_provider(
+        tmp_path, {"id": "pending-real-id", "status": "in_progress", "steps": []}
+    )
+    with pytest.raises(RequestTimeoutUnknownOutcome) as caught:
+        run_render(provider, request_for())
+    assert caught.value.interaction_id == "pending-real-id"
+
+
+def test_short_extension_is_not_accepted_as_cumulative_output(tmp_path):
+    provider = make_provider(
+        tmp_path, envelope_with(base64.b64encode(build_minimal_mp4(duration_s=10)).decode())
+    )
+    request = request_for()
+    request.task = "extend"
+    request.expected_duration_s = 20
+    request.parent_interaction_id = "seed-id"
+    with pytest.raises(ProviderError, match="Cumulative"):
+        run_render(provider, request)
+
+
+def test_server_id_is_durable_before_download_failure(tmp_path, manifest, monkeypatch):
+    from omni_homevlog.errors import RequestTimeoutUnknownOutcome
+    from omni_homevlog.schemas import InteractionRecord
+    from omni_homevlog.storage.manifest import ManifestStore
+
+    provider = make_provider(
+        tmp_path, envelope_with(base64.b64encode(build_minimal_mp4(duration_s=10)).decode())
+    )
+    record = InteractionRecord(
+        interaction_id="pending-crash",
+        job_id=provider.paths.job_id,
+        segment_index=0,
+        attempt_index=0,
+        provider="base",
+        project="test-project",
+        model=provider.model,
+        task="text_to_video",
+        request_started_at="2026-09-22T00:00:00Z",
+        status="dispatched",
+        outcome_known=False,
+    )
+    store = ManifestStore(provider.paths)
+    store.create(
+        manifest.model_copy(update={"job_id": provider.paths.job_id, "interactions": [record]})
+    )
+
+    def disk_failed(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(provider, "_materialise", disk_failed)
+    with pytest.raises(RequestTimeoutUnknownOutcome):
+        run_render(provider, request_for())
+    saved = store.load().interactions[0]
+    assert saved.interaction_id == "int-test-0001"
+    assert not saved.outcome_known
+
+
+def test_verified_local_receipt_recovers_without_server_query(tmp_path):
+    import asyncio
+
+    provider = make_provider(
+        tmp_path, envelope_with(base64.b64encode(build_minimal_mp4(duration_s=10)).decode())
+    )
+    original = run_render(provider, request_for())
+    # StubTransport intentionally has no get_interaction: any remote GET fails.
+    restored = asyncio.run(provider.get_interaction(original.interaction_id))
+    assert restored == original

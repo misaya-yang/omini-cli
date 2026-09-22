@@ -138,3 +138,8 @@ Do not ask for Owner, Editor, or Storage Admin. Nothing here needs them, and
 verified at build time. Every cost figure the tool prints is an **estimate**; the
 manifest records token counts, so a reconciliation against Cloud Billing is
 possible. Nothing here reads your billing account.
+## Reproducing the 2026-09-22 dependency baseline
+
+From a clean Python 3.12 environment, use `uv pip install -r requirements-dev.lock` followed by `uv pip install -e .`. The lock is a snapshot of the tested development environment; update it deliberately alongside tests. The REST transport does not require google-genai.
+
+Install ffmpeg/ffprobe (`brew install ffmpeg` on macOS) for actual keyframe extraction. The local lock implementation supports macOS/Linux; Windows is not currently tested. See `ACCEPTANCE_20260922.md` for the measured capabilities and the current remote GET recovery blocker.

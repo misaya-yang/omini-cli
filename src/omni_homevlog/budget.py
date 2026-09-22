@@ -196,6 +196,9 @@ class Budget(BaseModel):
     def snapshot(self) -> dict[str, int | str | None]:
         return {
             "max_total_calls": self.max_total_calls,
+            "max_seed_attempts": self.max_seed_attempts,
+            "max_edit_attempts_per_segment": self.max_edit_attempts_per_segment,
+            "max_regenerations_per_segment": self.max_regenerations_per_segment,
             "calls_made": self.calls_made,
             "remaining_calls": self.remaining_calls(),
             "video_seconds_requested": self.video_seconds_requested,

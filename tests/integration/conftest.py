@@ -155,7 +155,9 @@ class FakeProvider:
             task="edit",
             segment_index=segment_index if segment_index is not None else 0,
             attempt_index=attempt_index,
-            duration_s=artifact.requested_duration_s or 10,
+            duration_s=round(artifact.media.duration_s)
+            if artifact.media and artifact.media.duration_s
+            else artifact.requested_duration_s or 10,
             parent=artifact,
             kind="edit",
         )
@@ -279,10 +281,16 @@ class FakeProvider:
 
         target = self.paths.attempt_path(segment_index, attempt_index, kind=kind)
         target.parent.mkdir(parents=True, exist_ok=True)
+        output_duration = min(self.behaviour.duration_s, float(duration_s))
+        if parent is not None and parent.media is not None:
+            if task == "extend":
+                output_duration += parent.media.duration_s or 0.0
+            elif task == "edit":
+                output_duration = parent.media.duration_s or output_duration
         atomic_write_bytes(
             target,
             build_minimal_mp4(
-                duration_s=min(self.behaviour.duration_s, float(duration_s)),
+                duration_s=output_duration,
                 with_c2pa=self.behaviour.with_c2pa,
             ),
         )
@@ -442,7 +450,20 @@ def build_job(tmp_path, spec, fake_plan, monkeypatch):
         reset_settings_cache()
 
         resolved = spec_override or spec
-        ctx = JobContext.create(spec=resolved)
+        from omni_homevlog.schemas import ProviderCapabilities
+
+        caps = ProviderCapabilities(
+            provider="vertex",
+            project=resolved.project,
+            model=resolved.model or "",
+            t2v=True,
+            reference_to_video=True,
+            edit=True,
+            extend=True,
+            stateful_previous_interaction_id=True,
+            max_total_chain_s=40,
+        )
+        ctx = JobContext.create(spec=resolved, capabilities=caps)
 
         # A real job is created with approved references, and the seed is then a
         # reference_to_video render. Pass `references=0` for the bare case.

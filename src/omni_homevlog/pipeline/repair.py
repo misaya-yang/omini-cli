@@ -30,6 +30,7 @@ from omni_homevlog.pipeline.render_seed import _persist as persist_artifact
 from omni_homevlog.pipeline.render_seed import (
     _record_failed_interaction,
     _record_unknown_outcome,
+    record_dispatch_pending,
 )
 from omni_homevlog.schemas import JobState, RenderArtifact, SegmentPlan
 
@@ -55,7 +56,15 @@ def run_edit(
     # An edit re-renders the whole segment, so it must reserve the same seconds a
     # regeneration would. Reserving 0 left `max_video_seconds_requested` and the
     # cost ceiling unable to see edits at all.
-    edit_seconds = artifact.requested_duration_s or 10
+    from omni_homevlog.errors import CapabilityMissingError
+
+    if ctx.capabilities is None or not ctx.capabilities.edit:
+        raise CapabilityMissingError("Editing has not passed a probe for this job.")
+    edit_seconds = (
+        round(artifact.media.duration_s)
+        if artifact.media and artifact.media.duration_s
+        else artifact.requested_duration_s or 10
+    )
     try:
         ctx.authorize(
             CallKind.EDIT,
@@ -82,6 +91,13 @@ def run_edit(
 
     import asyncio
 
+    record_dispatch_pending(
+        ctx,
+        segment_index=segment_index,
+        attempt_index=attempt_index,
+        task="edit",
+        parent_interaction_id=artifact.interaction_id,
+    )
     try:
         edited = asyncio.run(
             ctx.provider.edit(
@@ -96,6 +112,8 @@ def run_edit(
         _record_unknown_outcome(
             ctx, segment_index=segment_index, attempt_index=attempt_index, exc=exc
         )
+        if exc.code == "interaction_pending":
+            raise
         ctx.manifest = ctx.store.transition(
             target=JobState.NEEDS_HUMAN,
             note="edit timed out with unknown outcome; resolve by querying, not by re-issuing",
@@ -184,6 +202,13 @@ def run_regenerate(
 
     import asyncio
 
+    record_dispatch_pending(
+        ctx,
+        segment_index=segment_index,
+        attempt_index=attempt_index,
+        task="reference_to_video" if task == "seed" else "extend",
+        parent_interaction_id=source.interaction_id if source else None,
+    )
     try:
         if task == "seed":
             regenerated = asyncio.run(
@@ -212,6 +237,8 @@ def run_regenerate(
         _record_unknown_outcome(
             ctx, segment_index=segment_index, attempt_index=attempt_index, exc=exc
         )
+        if exc.code == "interaction_pending":
+            raise
         ctx.manifest = ctx.store.transition(
             target=JobState.NEEDS_HUMAN,
             note="regeneration timed out with unknown outcome",

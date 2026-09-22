@@ -202,9 +202,11 @@ def test_gemini_api_can_send_the_documented_shape_if_asked() -> None:
 # ─ hints ───────────────────────────────────────────────────────────────────
 
 
-def test_vertex_defaults_to_strategy_a() -> None:
-    """Strategy A is verified here, so it is the default even when unprobed."""
-    assert vertex().chain_strategy(None) == "A"
+def test_vertex_requires_measured_strategy() -> None:
+    from omni_homevlog.errors import CapabilityMissingError
+
+    with pytest.raises(CapabilityMissingError):
+        vertex().chain_strategy(None)
 
 
 def test_vertex_falls_back_through_the_strategies() -> None:

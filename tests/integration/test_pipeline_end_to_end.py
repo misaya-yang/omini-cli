@@ -407,7 +407,14 @@ def test_status_summary_is_serialisable(build_job) -> None:
     data = summary(ctx)
     json.dumps(data, default=str)
     assert data["segments_rendered"] == 3
-    assert data["chain_seconds"] > 0
+    # Native extension returns the complete film: 10s -> 20s -> 30s.
+    # Summing these artifacts would incorrectly report a 60-second final film.
+    assert [a.media.duration_s for a in ctx.manifest.segment_artifacts()] == [10, 20, 30]
+    assert data["chain_seconds"] == 30
+    from omni_homevlog.media.ffprobe import inspect_media
+
+    assert inspect_media(ctx.paths.final_video_path).duration_s == 30
+    assert ctx.budget.video_seconds_requested == 30
     assert data["unresolved_interactions"] == []
 
 

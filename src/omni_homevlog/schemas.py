@@ -168,11 +168,14 @@ class ProjectSpec(BaseModel):
     audio_enabled: bool = True
     style: str = "intimate handheld boyfriend-POV home vlog, natural and unposed"
     provider: ProviderName
-    max_total_calls: int = 8
+    max_total_calls: int = Field(default=8, ge=1)
     #: Ceiling on the *estimated* spend for this job. None means no ceiling.
     #: `omni-vlog create --max-cost` presented this and then dropped it, so the
     #: flag appeared to work while the budget ignored it entirely.
     max_estimated_cost_usd: Decimal | None = None
+
+    max_llm_calls: int = Field(default=24, ge=1)
+    background: bool = False
 
     # ── Extensions to the plan's §7.1 shape (all optional / defaulted) ───────
     mode: RunMode = "production"
@@ -183,7 +186,7 @@ class ProjectSpec(BaseModel):
     #: GCS prefix for `delivery: "uri"`. None ⇒ inline base64 delivery.
     gcs_uri: str | None = None
     #: Concept mode renders a short probe instead of the full chain.
-    concept_duration_s: int = 4
+    concept_duration_s: int = Field(default=4, ge=3, le=6)
     #: Human gates. `high-res` gates the higher-resolution pass, `final` gates
     #: export, `each-segment` gates every segment.
     human_gates: list[Gate] = Field(default_factory=_default_gates)
@@ -200,7 +203,7 @@ class ProjectSpec(BaseModel):
     @property
     def extension_count(self) -> int:
         """How many 10s extensions follow the seed segment."""
-        return max(0, self.target_duration_s // 10 - 1)
+        return 0 if self.mode == "concept" else max(0, self.target_duration_s // 10 - 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -377,6 +380,10 @@ class ProviderCapabilities(BaseModel):
     provider: str
     project: str | None
     model: str
+    location: str | None = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    measured_generation_s: float | None = None
+    measured_chain_s: float | None = None
     t2v: bool = False
     i2v: bool = False
     reference_to_video: bool = False
@@ -395,6 +402,8 @@ class ProviderCapabilities(BaseModel):
     uri_delivery: bool = False
     gcs_delivery: bool = False
     native_audio: bool = False
+    async_polling: bool = False
+    remote_retrieval: bool = False
     probed_at: str = Field(default_factory=utc_now_iso)
     notes: list[str] = Field(default_factory=list)
 
@@ -428,6 +437,7 @@ class ReferenceAsset(BaseModel):
     width: int | None = None
     height: int | None = None
     mime_type: str | None = None
+    staged_uri: str | None = None
     perceptual_hash: str | None = None
     sanitizer: SanitizerReport | None = None
 
@@ -543,6 +553,7 @@ class RenderArtifact(BaseModel):
 
     #: Relative path under the job directory, e.g. "renders/segment_00/attempt_00_raw.mp4".
     artifact_relpath: str | None = None
+    steps_path: str | None = None
 
     #: True when this artifact's bytes are a local ffmpeg transform of a provider
     #: output rather than the provider's own bytes (§22).
@@ -644,6 +655,9 @@ class Manifest(BaseModel):
     segments: list[RenderArtifact] = Field(default_factory=list)
     final_path: str | None = None
     final_derived: bool = False
+    final_source_path: str | None = None
+    final_source_sha256: str | None = None
+    final_sha256: str | None = None
 
     c2pa_present: bool | None = None
     synthid_expected: bool | None = None
