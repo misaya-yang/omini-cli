@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from omni_homevlog.config import Settings
-from omni_homevlog.errors import InteractionPending
+from omni_homevlog.errors import InteractionPending, ProviderError
 from omni_homevlog.schemas import RenderArtifact
 from omni_homevlog.studio.app import create_app
 from omni_homevlog.studio.service import StudioService
@@ -123,6 +123,29 @@ def test_pending_is_get_only_and_blocks_new_post(studio):
     assert wait(client, cid)["versions"][0]["status"] == "ready"
     assert svc.calls == 1 and svc.gets == 1
     assert client.post(f"/api/creations/{cid}/recover", headers=HEADERS).status_code == 400
+
+
+def test_failed_remote_query_keeps_original_interaction_pending(studio, monkeypatch):
+    client, svc = studio
+    svc.pending = True
+    cid = create(client)["id"]
+
+    def disconnected(*_args):
+        svc.gets += 1
+        raise ProviderError("proxy disconnected")
+
+    monkeypatch.setattr(svc, "_recover", disconnected)
+    assert client.post(f"/api/creations/{cid}/recover", headers=HEADERS).status_code == 202
+    version = wait(client, cid)["versions"][0]
+    assert version["status"] == "pending"
+    assert "稍后会重试" in version["message"]
+    assert svc.load(cid)["versions"][0]["interaction_id"] == "remote-1"
+    assert svc.calls == 1 and svc.gets == 1
+
+    monkeypatch.setattr(svc, "_recover", lambda data, version: svc.artifact(data, version))
+    assert client.post(f"/api/creations/{cid}/recover", headers=HEADERS).status_code == 202
+    assert wait(client, cid)["versions"][0]["status"] == "ready"
+    assert svc.calls == 1
 
 
 def test_upload_validation_and_reference_route(studio):

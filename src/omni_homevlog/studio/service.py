@@ -279,6 +279,18 @@ class StudioService:
             logger.exception("Studio operation failed")
             data = self.load(cid)
             version = data["versions"][-1]
+            if recover and version.get("interaction_id") and getattr(exc, "code", "") not in (
+                "auth_error",
+                "permission_denied",
+                "missing_credentials",
+            ):
+                # The original interaction is still addressable. A failed GET
+                # says nothing about the render's outcome and must not stop
+                # future read-only polling.
+                version["status"] = "pending"
+                version["message"] = "查询暂时失败，稍后会重试原任务。" + self._error_message(exc)
+                self.save(data)
+                return
             # A reserved request without a result must never become retryable.
             from omni_homevlog.errors import OmniVlogError
 
@@ -301,6 +313,7 @@ class StudioService:
             "quota_exhausted": "当前模型配额已用完，请稍后再试。",
             "budget_exhausted": "已达到本次调用预算，没有继续提交。",
             "capability_missing": "当前模型尚未验证这项能力，请先完成对应的 doctor 检查。",
+            "provider_error": "请检查本机网络或代理连接。",
         }.get(code, "请查看终端日志中的错误详情。")
 
     def _render(self, data: dict[str, Any], version: dict[str, Any]) -> RenderArtifact:

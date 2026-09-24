@@ -10,6 +10,16 @@ function App(){
  const refresh=useCallback(async()=>{try{const data=await api('/creations');setList(data);setLoaded(true)}catch(e){setError(e.message)}},[]);
  useEffect(()=>{refresh();const timer=setInterval(refresh,3000);return()=>clearInterval(timer)},[refresh]);
  const creation=list.find(c=>c.id===selected);
+ const waitingForProvider=creation?.versions.at(-1)?.status==='pending'&&!creation.busy;
+ useEffect(()=>{
+  if(!selected||!waitingForProvider)return;
+  const timer=setTimeout(async()=>{
+   try{await post('/creations/'+selected+'/recover',{})}
+   catch(e){if(!e.message.includes('正在处理'))setError('自动查询失败：'+e.message)}
+   await refresh();
+  },30000);
+  return()=>clearTimeout(timer);
+ },[selected,waitingForProvider,creation?.updated_at,refresh]);
  async function action(fn){setSubmitting(true);setError('');try{await fn();await refresh();return true}catch(e){setError(e.message);return false}finally{setSubmitting(false)}}
  const createRequest=useRef(null);
  const create=(form,files)=>action(async()=>{const fingerprint=JSON.stringify([form,files.map(f=>[f.name,f.size,f.lastModified])]);if(createRequest.current?.fingerprint!==fingerprint)createRequest.current={fingerprint,id:crypto.randomUUID().replaceAll('-','')};const body=new FormData();body.append('options',JSON.stringify({...form,request_id:createRequest.current.id}));files.forEach(f=>body.append('images',f));const data=await api('/creations',{method:'POST',body});setSelected(data.id);createRequest.current=null});
