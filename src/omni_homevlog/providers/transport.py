@@ -275,9 +275,42 @@ class VertexRestTransport(BaseTransport):
         return vertex_interactions_url(self.project, self.location)
 
     def get_url(self, interaction_id: str) -> str:
-        # Verified 2026-09-22: unary GET fails for a stored Omni video while
-        # streaming GET returns identical bytes in step.delta events.
+        # Streaming GET returns completed video bytes in step.delta events.
         return vertex_interaction_url(self.project, self.location, interaction_id) + "?stream=true"
+
+    def get_interaction(self, interaction_id: str) -> TransportResult:
+        """Read the authoritative status first, then stream large video output.
+
+        A failed interaction can remain `in_progress` in the streaming replay
+        even after unary GET reports its terminal safety error. Conversely,
+        unary GET has returned 5xx for completed inline videos that streaming
+        GET recovers. Both calls are read-only and retain the original ID.
+        """
+        started = time.monotonic()
+        try:
+            response = self._get(
+                vertex_interaction_url(self.project, self.location, interaction_id),
+                self._auth_headers(),
+            )
+            finished = time.monotonic()
+            raw_text = _body_text(response)
+            status = int(getattr(response, "status_code", 200))
+            self._dump_fixture(
+                "get_unary_response", {"interaction_id": interaction_id}, raw_text, finished
+            )
+            if 400 <= status < 500:
+                raise self._classify_response_error(response, raw_text)
+            if status < 400:
+                envelope = parse_interaction(raw_text, expected_id=interaction_id)
+                if envelope.status != "completed" or envelope.videos:
+                    return TransportResult(envelope, status, started, finished, raw_text)
+        except RequestTimeoutUnknownOutcome:
+            logger.debug("Unary interaction query timed out; trying stream", exc_info=True)
+        except ProviderError as exc:
+            if exc.http_status is not None and 400 <= exc.http_status < 500:
+                raise
+            logger.debug("Unary interaction query unavailable; trying stream", exc_info=True)
+        return super().get_interaction(interaction_id)
 
     def _auth_headers(self) -> dict[str, str]:
         # The Authorization header is injected by AuthorizedSession. We never

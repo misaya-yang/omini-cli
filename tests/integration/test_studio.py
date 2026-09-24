@@ -1,6 +1,7 @@
 """HTTP workflow and durable recovery without external requests."""
 
 import io
+import threading
 import time
 from pathlib import Path
 
@@ -64,7 +65,7 @@ def studio(tmp_path):
 def wait(client, cid):
     for _ in range(100):
         data = client.get("/api/creations/" + cid).json()
-        if not data["busy"]:
+        if not data["busy"] and data["versions"][-1]["status"] not in ("queued", "running"):
             return data
         time.sleep(0.01)
     raise AssertionError("worker did not finish")
@@ -136,14 +137,51 @@ def test_failed_remote_query_keeps_original_interaction_pending(studio, monkeypa
 
     monkeypatch.setattr(svc, "_recover", disconnected)
     assert client.post(f"/api/creations/{cid}/recover", headers=HEADERS).status_code == 202
-    version = wait(client, cid)["versions"][0]
+    for _ in range(100):
+        version = client.get(f"/api/creations/{cid}").json()["versions"][0]
+        if "稍后会重试" in version["message"]:
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("read-only query error was not recorded")
     assert version["status"] == "pending"
     assert "稍后会重试" in version["message"]
     assert svc.load(cid)["versions"][0]["interaction_id"] == "remote-1"
     assert svc.calls == 1 and svc.gets == 1
+    assert not wait(client, cid)["busy"]
 
     monkeypatch.setattr(svc, "_recover", lambda data, version: svc.artifact(data, version))
     assert client.post(f"/api/creations/{cid}/recover", headers=HEADERS).status_code == 202
+    for _ in range(100):
+        if client.get(f"/api/creations/{cid}").json()["versions"][0]["status"] == "ready":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("recovered output did not become ready")
+    assert svc.calls == 1
+
+
+def test_concurrent_status_queries_do_not_return_server_error(studio, monkeypatch):
+    client, svc = studio
+    svc.pending = True
+    cid = create(client)["id"]
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_query(data, version):
+        entered.set()
+        assert release.wait(2)
+        return svc.artifact(data, version)
+
+    monkeypatch.setattr(svc, "_recover", slow_query)
+    assert client.post(f"/api/creations/{cid}/recover", headers=HEADERS).status_code == 202
+    assert entered.wait(1)
+    try:
+        again = client.post(f"/api/creations/{cid}/recover", headers=HEADERS)
+        assert again.status_code == 400
+        assert "正在处理" in again.json()["detail"]
+    finally:
+        release.set()
     assert wait(client, cid)["versions"][0]["status"] == "ready"
     assert svc.calls == 1
 

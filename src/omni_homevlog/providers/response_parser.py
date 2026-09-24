@@ -270,6 +270,7 @@ def _from_event_stream(events: list[dict[str, Any]]) -> tuple[dict[str, Any], st
     steps: dict[int, dict[str, Any]] = {}
     seen_events: set[str] = set()
     interaction_id: str | None = None
+    latest_status: str | None = None
 
     for event in events:
         event_id = event.get("event_id")
@@ -286,14 +287,22 @@ def _from_event_stream(events: list[dict[str, Any]]) -> tuple[dict[str, Any], st
             if interaction_id and interaction_id != observed_id:
                 raise ProviderError("Stream mixes different interaction IDs.")
             interaction_id = str(observed_id)
+        if isinstance(interaction, dict) and isinstance(interaction.get("status"), str):
+            latest_status = interaction["status"]
+        elif etype == "interaction.status_update" and isinstance(event.get("status"), str):
+            latest_status = event["status"]
         index = event.get("index")
         if isinstance(index, int) and etype == "step.start" and isinstance(event.get("step"), dict):
             steps[index] = dict(event["step"])
         elif isinstance(index, int) and etype == "step.delta":
             step = steps.get(index)
             delta = event.get("delta")
-            if (step is not None and step.get("type") == "model_output" and isinstance(delta, dict)
-                    and delta.get("type") in ("video", "text", "image", "audio")):
+            if (
+                step is not None
+                and step.get("type") == "model_output"
+                and isinstance(delta, dict)
+                and delta.get("type") in ("video", "text", "image", "audio")
+            ):
                 # Observed GET: video is a delta, completion has status/usage only.
                 step.setdefault("content", []).append(dict(delta))
         if etype == "interaction.completed" and isinstance(interaction, dict):
@@ -324,6 +333,8 @@ def _from_event_stream(events: list[dict[str, Any]]) -> tuple[dict[str, Any], st
 
     if latest_any is not None:
         payload = dict(latest_any)
+        if latest_status:
+            payload["status"] = latest_status
         if not payload.get("steps") and steps:
             payload["steps"] = [steps[i] for i in sorted(steps)]
         return payload, "sse:other"

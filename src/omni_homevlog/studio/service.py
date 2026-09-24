@@ -192,36 +192,37 @@ class StudioService:
     def submit(
         self, cid: str, *, prompt: str = "", parent: int | None = None, recover: bool = False
     ) -> None:
-        with self.guard, job_lock(self.root / f"{cid}.lock"):
+        with self.guard:
             if cid in self.active:
                 raise ValueError("这份作品正在处理，请稍候")
-            data = self.load(cid)
-            pending = data["versions"] and data["versions"][-1]["status"] in (
-                "queued",
-                "running",
-                "pending",
-                "unknown",
-            )
-            if recover:
-                if not pending:
-                    raise ValueError("当前没有需要恢复的任务")
-            else:
-                if pending:
-                    raise ValueError("上一次生成尚未确认结果，请先查询进度，避免重复付费")
-                if not prompt.strip():
-                    raise ValueError("请填写修改描述")
-                if parent is not None and (
-                    parent < 0
-                    or parent >= len(data["versions"])
-                    or not data["versions"][parent].get("artifact")
-                ):
-                    raise ValueError("请先选择一个已完成的视频版本")
-                data["versions"].append(
-                    {"prompt": prompt.strip(), "parent": parent, "status": "queued"}
+            with job_lock(self.root / f"{cid}.lock"):
+                data = self.load(cid)
+                pending = data["versions"] and data["versions"][-1]["status"] in (
+                    "queued",
+                    "running",
+                    "pending",
+                    "unknown",
                 )
-                self.save(data)
-            self.active.add(cid)
-            self.pool.submit(self._work, cid, recover)
+                if recover:
+                    if not pending:
+                        raise ValueError("当前没有需要恢复的任务")
+                else:
+                    if pending:
+                        raise ValueError("上一次生成尚未确认结果，请先查询进度，避免重复付费")
+                    if not prompt.strip():
+                        raise ValueError("请填写修改描述")
+                    if parent is not None and (
+                        parent < 0
+                        or parent >= len(data["versions"])
+                        or not data["versions"][parent].get("artifact")
+                    ):
+                        raise ValueError("请先选择一个已完成的视频版本")
+                    data["versions"].append(
+                        {"prompt": prompt.strip(), "parent": parent, "status": "queued"}
+                    )
+                    self.save(data)
+                self.active.add(cid)
+                self.pool.submit(self._work, cid, recover)
 
     def _work(self, cid: str, recover: bool) -> None:
         try:
@@ -279,10 +280,15 @@ class StudioService:
             logger.exception("Studio operation failed")
             data = self.load(cid)
             version = data["versions"][-1]
-            if recover and version.get("interaction_id") and getattr(exc, "code", "") not in (
-                "auth_error",
-                "permission_denied",
-                "missing_credentials",
+            if (
+                recover
+                and version.get("interaction_id")
+                and getattr(exc, "code", "")
+                not in (
+                    "auth_error",
+                    "permission_denied",
+                    "missing_credentials",
+                )
             ):
                 # The original interaction is still addressable. A failed GET
                 # says nothing about the render's outcome and must not stop
